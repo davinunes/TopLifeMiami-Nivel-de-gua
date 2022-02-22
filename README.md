@@ -8,6 +8,8 @@ Projeto para monitoramento de nível de água do Miami Beach
 Utilizar um Sensor ultrassonico para medir o que falta de água no tanque, e calcular o que tem de água.
 Então, exibir a medida atual na tela e a cada período de tempo, publicar os dados na internet.
 
+> Esse projeto requer sinal de WiFi proximo ao microcontrolador.
+
 ![](imagens/sensor-de-nível-ultrassonico.jpg)
 
 Foram explorados três métodos de publicação na Internet:
