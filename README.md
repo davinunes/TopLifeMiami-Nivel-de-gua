@@ -20,6 +20,8 @@ Foram explorados três métodos de publicação na Internet:
 
 ## Material utilizado
 
+> Nota: Alguns materiais, como cano e cabo, podem ser adquiridos por metro, diminuindo o custo. Ou mesmo utilizar resto que já exista em estoque.
+
 ### Itens Essenciais
 
 #### Sensor de Ultrassom
@@ -51,6 +53,8 @@ Foram explorados três métodos de publicação na Internet:
 #### CAP 50mm Esgoto, com anel de vedação
 ![](imagens/Screenshot_10.png)
 ![](imagens/Screenshot_16.png)
+
+> Nota: Se for utilizar o sensor impermeável, substituir esses dois itens e a redução de 50/25 por um cap de 25.
 
 #### Redução 50/25mm água
 ![](imagens/Screenshot_11.png)
