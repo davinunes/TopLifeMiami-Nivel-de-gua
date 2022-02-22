@@ -83,6 +83,9 @@ Para instalar o LCD e acomodar o ESP32
 
 #### A montagem das peças:
 
+O esquema de conexão dos fios segue:
+![](imagens/Screenshot_28.png)
+
 Fure o CAP de modo que o sensor encaixe bem justo
 
 ![](imagens/Screenshot_17.png)
