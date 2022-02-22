@@ -42,6 +42,9 @@ Foram explorados três métodos de publicação na Internet:
 ![](imagens/Screenshot_5.png)
 
 #### Tubo para isolamento de emendas
+
+> Ou use fita isolante
+
 ![](imagens/Screenshot_9.png)
 
 #### Cabo para conextar o sensor da caixa ao controlador
