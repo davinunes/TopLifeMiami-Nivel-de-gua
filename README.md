@@ -37,6 +37,7 @@ Monitorar o Nivel de água do reservatório
 
 #### CAP 50mm Esgoto, com anel de vedação
 ![](imagens/Screenshot_10.png)
+![](imagens/Screenshot_16.png)
 
 #### Redução 50/25mm água
 ![](imagens/Screenshot_11.png)
