@@ -14,8 +14,8 @@ Então, exibir a medida atual na tela e a cada período de tempo, publicar os da
 
 Foram explorados três métodos de publicação na Internet:
 
-- Plataforma **Adafruit.io**, um broquer MQTT popular em projetos de automação (https://io.adafruit.com/ilunne/dashboards/agua?kiosk=true)
-- Um site particular, representando um sistema hospedado na nuvem (http://davinunes.eti.br/Agua/)
+- Plataforma **Adafruit.io**, um broquer MQTT popular em projetos de automação [link](https://io.adafruit.com/ilunne/dashboards/agua?kiosk=true)
+- Um site particular, representando um sistema hospedado na nuvem [link](http://davinunes.eti.br/Agua/)
 - API do telegram, enviando mensagens periódicas, representando um sistema de alerta
 
 
