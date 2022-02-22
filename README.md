@@ -1,9 +1,22 @@
 # TopLifeMiami-Nivel-de-gua
 Projeto para monitoramento de nível de água do Miami Beach
 
-## Objetivo
 
-Monitorar o Nivel de água do reservatório
+
+## Conceito
+
+Utilizar um Sensor ultrassonico para medir o que falta de água no tanque, e calcular o que tem de água.
+Então, exibir a medida atual na tela e a cada período de tempo, publicar os dados na internet.
+
+![](imagens/sensor-de-nível-ultrassonico.jpg)
+
+Foram explorados três métodos de publicação na Internet:
+
+- Plataforma **Adafruit.io**, um broquer MQTT popular em projetos de automação
+- Um site particular, representando um sistema hospedado na nuvem
+- API do telegram, enviando mensagens periódicas, representando um sistema de alerta
+
+
 
 ## Material utilizado
 
