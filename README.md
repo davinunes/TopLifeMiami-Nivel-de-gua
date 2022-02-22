@@ -82,30 +82,39 @@ Para instalar o LCD e acomodar o ESP32
 #### A montagem das peças:
 
 Fure o CAP de modo que o sensor encaixe bem justo
+
 ![](imagens/Screenshot_17.png)
 
 Utilize algum material para servir de apoio ao sensor. Eu utilizei um pedaço de isopor
+
 ![](imagens/Screenshot_18.png)
 
 Ajuste a altura pra sona não ficar muito pra fora
+
 ![](imagens/Screenshot_19.png)
 
 Faça as emendas necessárias e ANOTE a sequencia correta dos fios, seguindo o codigo do projeto
+
 ![](imagens/Screenshot_23.png)
 
 Encaise o cap, a redução e um pedaço de cano, com o já conectado ao sensor e fixe na caixa. A Sonda não deve encostar na água
+
 ![](imagens/Screenshot_20.png)
 
-Com uma trena, meça quantos centimetros tem entre a sonda e o nivel maximo da água. Essa informação deve ser inserida no programa antes de gravar.
+Com uma trena, meça quantos centimetros tem entre a sonda e o nivel maximo da água. Essa informação deve ser inserida no programa antes de gravar
+
 ![](imagens/Screenshot_21.png)
 
-Faça os acabamentos necessários. Esta etapa pode variar de caso a caso.
+Faça os acabamentos necessários. Esta etapa pode variar de caso a caso
+
 ![](imagens/Screenshot_22.png)
 
 Na casa de máquinas, ou onde for ficar o microcontrolador, faça as conexões conforme o projeto
+
 ![](imagens/Screenshot_24.png)
 
-Imagem do armário na casa de máquinas.
+Imagem do armário na casa de máquinas
+
 ![](imagens/Screenshot_25.png)
 
 > É verdade, ficou bem feio mas vamos logo mais acomodar em uma caixa de sobrepor e prender a tela na tampa cega.
