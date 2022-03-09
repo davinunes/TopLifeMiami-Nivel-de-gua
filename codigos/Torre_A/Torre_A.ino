@@ -19,7 +19,7 @@
 int idSensor = 3; 
 
 // Qual feed receberá as leituras na adafruit?
-#define FEED_PERC   "/feeds/Torre_A_P"
+#define FEED_PERC   "/feeds/Torre_99_P"
 
 // A que distancia a sonda está do nivel máximo de água?
 int distanciaSonda = 20; 
@@ -36,7 +36,7 @@ int alturaAgua = 240;
  * Torre F Reservatório 01
  * */
  
-String nomeDaSonda = "Torre A Reservatório 01";
+String nomeDaSonda = "Torre 99";
 
 // Qual Nome da Rede Wifi na casa de máquinas?
 
@@ -49,10 +49,10 @@ String nomeDaSonda = "Torre A Reservatório 01";
  * TAIFIBRA-BLOCO F
  * */
  
-const char* ssid = "TAIFIBRA-BLOCO A"; 
+const char* ssid = "Eternia"; 
 
 // Qual Senha da rede Wifi = taifibratelecom
-const char* password = "taifibratelecom"; 
+const char* password = "celestia"; 
 
 // Endereços do github que serão utilizados para ajustar variáveis remotas:
 String IntervaloDePush      = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/updateTime";
@@ -235,6 +235,7 @@ void eti(int num) {
   // ColeSeuTokenAqui ColeIDdoGrupoAqui TestandoEnvio
   //Vamos obter a URL perguntando também ao github
   String url = urlSite+"/sonda/?sensor=" + String(idSensor) + "&valor=" + String(num);
+  Serial.println(url);
   Serial.println(wget(url));
 }
 
