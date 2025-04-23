@@ -1,12 +1,21 @@
-/* ESTE SKETCH É  BASEADO NO EXEMPLO DA LIBRARY esp8266 and esp32 OLED driver for SSD1306
-   Bibliografia: https://www.youtube.com/watch?v=dD2BqAsN96c, https://www.curtocircuito.com.br/blog/Categoria%20IoT/desenvolvimento-de-dashboard-mqtt-com-adafruitio
+/* 
+   ESTE SKETCH É BASEADO NO EXEMPLO DA LIBRARY esp8266 and esp32 OLED driver for SSD1306
+   Bibliografia: 
+   - https://www.youtube.com/watch?v=dD2BqAsN96c
+   - https://www.curtocircuito.com.br/blog/Categoria%20IoT/desenvolvimento-de-dashboard-mqtt-com-adafruitio
    PINOUT da placa utilizada: https://raw.githubusercontent.com/AchimPieters/esp32-homekit-camera/master/Images/ESP32-30PIN-DEVBOARD.png
 */
 
-// CONFIGURAÇÕES DA INSTALAÇÃO
+// ==================== BIBLIOTECAS ====================
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include "SSD1306Wire.h"
+#include <Ultrasonic.h>
 
-// Qual id do sensor no site davinunes.eti.br? (ou outro que for escolhido)
-
+// ==================== CONFIGURAÇÕES ====================
+// Qual id do sensor no site davinunes.eti.br?
 /*
  * 1 - Torre E
  * 2 - Torre F
@@ -14,264 +23,150 @@
  * 4 - Torre B
  * 5 - Torre C
  * 6 - Torre D
- * */
- 
+ */
 int idSensor = 4; 
-
-// Qual feed receberá as leituras na adafruit?
-#define FEED_PERC   "/feeds/Torre_B_P"
 
 // A que distancia a sonda está do nivel máximo de água?
 int distanciaSonda = 20; 
+
 // Qual a altura maxima da coluna de água? (Não considerar a distancia da Sonda)
 int alturaAgua = 240; 
 
 // Qual Nome da Sonda nas mensagens do Telegram?
-/*
- * Torre A Reservatório 01
- * Torre B Reservatório 01
- * Torre C Reservatório 01
- * Torre D Reservatório 01
- * Torre E Reservatório 01
- * Torre F Reservatório 01
- * */
- 
 String nomeDaSonda = "Torre B Reservatório 01";
 
-// Qual Nome da Rede Wifi na casa de máquinas?
-
-/*
- * TAIFIBRA-BLOCO A
- * TAIFIBRA-BLOCO B
- * TAIFIBRA-BLOCO C
- * TAIFIBRA-BLOCO D
- * TAIFIBRA-BLOCO E
- * TAIFIBRA-BLOCO F
- * */
- 
+// Configurações WiFi padrão
 const char* ssid = "TAIFIBRA-BLOCO B"; 
-
-// Qual Senha da rede Wifi = taifibratelecom
 const char* password = "taifibratelecom"; 
 
-// Endereços do github que serão utilizados para ajustar variáveis remotas:
-String IntervaloDePush      = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/updateTime";
-String nivelAlertaTelegram  = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/nivelAlerta";
-String novoUrlSite          = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/novoUrlSite";
-
-
-//Variaveis para usar para enviar mensagem no telegram
-String chaveTelegram = "5199663658:AAF4D8-KtthX87TGX6pYHBiLGTTZYPyU3Z8";
-String chat = "-1001158157448"; //Chat do telgram que receberá qualquer leitura do sensor
-String alert = "-1001601389998"; // Chat do telgram que receberá mensagem apenas quando o nivel da água estiver abaixo do esperado
+// URLs para configuração remota
+String IntervaloDePush = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/updateTime";
+String nivelAlertaTelegram = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/nivelAlerta";
+String novoUrlSite = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/novoUrlSite";
 String urlSite = "h2o-miami.davinunes.eti.br";
 
-// Variaveis relacionadas a Adafruit
-#define IO_USERNAME "ilunne" //usuario
-#define IO_KEY2     "hMjk89XNaWhSBc7UxR70upfJch2A" //Cole apenas a parte depois do underline
+// ==================== VARIÁVEIS GLOBAIS ====================
+// Configurações do display
+unsigned long lastDisplayUpdate = 0;
+const unsigned long displayInterval = 500; // Atualizar a tela a cada 500ms
+SSD1306Wire display(0x3c, 21, 22); // Endereço I2C 0x3c, SDA=21, SCL=22
 
-
-/* INICIALIZA O Wifi
-   e o cliente http
-   Todas as variáveis abaixo são referentes ao wifi e ao delay entre os acessos a internet
-*/
-
-#include <WiFi.h>
-#include <HTTPClient.h>
-
-unsigned long lastTime = 0;
-unsigned long lastTimeAlert = 0;
-unsigned long timerDelay = 60000; //120 segundos
-unsigned long timerAlerta = 600000; //5 minutos
-unsigned long nivelAlerta = 80; //80%
-WiFiClient client;
-String StatusInternet = "Sem Wifi...";
-
-
-/* INICIALIZA O DISPLAY COM A LIB SSD1306Wire.h
-   SE UTILIZAR O DISPLAY SSD1306:
-   SSD1306Wire  display(0x3c, SDA, SCL);
-   SDA -> GPIO21
-   SCL -> GPIO22
-*/
-
-#include "SSD1306Wire.h"
-SSD1306Wire display(0x3c, 21, 22);
-
-
-/* Biblioteca Adafruit */
-
-#include "Adafruit_MQTT.h"
-#include "Adafruit_MQTT_Client.h"
-#define IO_SERVER     "io.adafruit.com"
-#define IO_SERVERPORT 1883
-#define IO_KEY1    "aio_"
-#define IO_USERNAME "ilunne"
-#define IO_KEY2    "hMjk89XNaWhSBc7UxR70upfJch2A"
-
-Adafruit_MQTT_Client mqtt(&client, IO_SERVER, IO_SERVERPORT, IO_USERNAME, IO_KEY1 IO_KEY2);
-//Adafruit_MQTT_Publish sonar01 = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME FEED_CM, MQTT_QOS_1);
-Adafruit_MQTT_Publish sonar02 = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME FEED_PERC, MQTT_QOS_1);
-Adafruit_MQTT_Subscribe wifiTime = Adafruit_MQTT_Subscribe(&mqtt, IO_USERNAME "/feeds/PlacaDSV_update_time");
-
-
-
-/* INICIALIZA O Sonar com a LIB Ultrasonic.h
-   Modelos HC-SR04 ou SEN136B5B
-*/
-
-#define TRIGGER_PIN  33 // Arduino pin tied to trigger pin on ping sensor.
-#define ECHO_PIN1    25 // Arduino pin tied to echo pin on ping sensor.
-
-
-#include <Ultrasonic.h>
-
+// Configurações do sonar
+#define TRIGGER_PIN  33
+#define ECHO_PIN1    25
 Ultrasonic sonar1(TRIGGER_PIN, ECHO_PIN1, 40000UL);
-
 int distancex;          // Distancia medida pelo sensor em CM
-int distance;         // Distancia medida pelo sensor em CM
-int minimo;            // Menor distancia já medida
-int maximo;            // Maior distancia já medida
+int distance;           // Distancia medida pelo sensor em CM
+int minimo = 0;         // Menor distancia já medida
+int maximo = 0;         // Maior distancia já medida
 int progresso = 0;      // Calculo da % da barra de progresso
 
+// Configurações de rede
+unsigned long lastTime = 0;
+unsigned long lastTimeAlert = 0;
+unsigned long timerDelay = 60000; // 60 segundos
+unsigned long timerAlerta = 600000; // 10 minutos
+unsigned long nivelAlerta = 80; // 80%
+String StatusInternet = "Sem Wifi...";
 
-/*
+// Configurações do servidor web
+WebServer server(80);
+Preferences prefs;
 
-   ===========================================
-   Configuração durante o boot do ESP32
-   ===========================================
+// ==================== ESTRUTURAS ====================
+struct Config {
+  String ssid;
+  String pass;
+  String sensorId;
+};
 
-*/
-
-/*
- * 
- * Protótipos
- * 
- * das
- * 
- * funções
- */
-
-String wget (String url);
-void telegramLog(String mensagem);
-void telegramAlarm(String mensagem);
+// ==================== PROTÓTIPOS DE FUNÇÕES ====================
+String wget(String url);
 void eti(int num);
-void conectar_broker();
-void callback();
 void sonar();
 void tela();
 void IoT();
 void internet();
 void getParametrosRemotos();
+String getMacSuffix();
+void startAccessPoint();
+Config loadConfig();
+void saveConfig(String ssid, String pass, String sensorId);
+void handleRoot();
+void handleSave();
+void setupWebServer();
 
-/*
- * Setup
- */
-
+// ==================== SETUP ====================
 void setup() {
   Serial.begin(115200);
+  
+  // Carrega configurações salvas
+  Config cfg = loadConfig();
+
+  // Exibe configurações carregadas
+  Serial.println("\n=== Configurações carregadas da EEPROM ===");
+  Serial.printf("SSID: %s\n", cfg.ssid.c_str());
+  Serial.printf("Senha: %s\n", cfg.pass.c_str());
+  Serial.printf("ID Sensor: %s\n", cfg.sensorId.c_str());
+  Serial.println("========================================\n");
+  
+  // Inicia WiFi em modo AP + STA
+  WiFi.mode(WIFI_AP_STA);
+  startAccessPoint();
+  
+  // Conecta à rede WiFi
+  WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
+  
+  // Configura servidor web
+  setupWebServer();
+  
+  // Verifica conexão
   internet();
 
-  // INICIALIZA O DISPLAY & INVERTE O DISPLAY VERTICALMENTE
+  // Inicializa o display
   display.init();
   display.flipScreenVertically();
-
-
-  // Realiza as inscrições MQTT
-  mqtt.subscribe(&wifiTime);
 }
 
-//========================================================================
-
+// ==================== LOOP PRINCIPAL ====================
 void loop() {
-  sonar();
-  tela();
-  IoT();
+  
+
+  if (millis() - lastDisplayUpdate >= displayInterval) {
+    sonar();
+    tela();
+    IoT();
+    lastDisplayUpdate = millis();
+  }
+  
+  server.handleClient();
 }
 
-/*
- * funções
- */
+// ==================== FUNÇÕES ====================
 
-
-String wget (String url) {
+String wget(String url) {
   HTTPClient http;
+  http.setTimeout(3000); // define timeout de 3s
+  http.begin(url);
 
-  String serverPath = url;
-
-  // Your Domain name with URL path or IP address with path
-  http.begin(serverPath.c_str());
-
-  // Send HTTP GET request
   int httpResponseCode = http.GET();
+  String payload;
 
   if (httpResponseCode > 0) {
-    String payload = http.getString();
-    return payload;
+    payload = http.getString();
+  } else {
+    Serial.print("Erro HTTP: ");
+    Serial.println(httpResponseCode);
+    payload = "erro";
+  }
 
-  }
-  else {
-    return "erro";
-  }
-  http.end();
-}
-
-void telegramLog(String mensagem) {
-  // ColeSeuTokenAqui ColeIDdoGrupoAqui TestandoEnvio
-  // https://api.telegram.org/bot5199663658:AAF4D8-KtthX87TGX6pYHBiLGTTZYPyU3Z8/getUpdates
-  String url = "https://api.telegram.org/bot" + chaveTelegram + "/sendMessage?chat_id=" + chat + "&text=" + mensagem;
-  wget(url);
-}
-void telegramAlarm(String mensagem) {
-  if ((millis() - lastTimeAlert) > timerAlerta) {
-  // ColeSeuTokenAqui ColeIDdoGrupoAqui TestandoEnvio
-  String url = "https://api.telegram.org/bot" + chaveTelegram + "/sendMessage?chat_id=" + alert + "&text=" + mensagem;
-  wget(url);
-  lastTimeAlert = millis(); // Esta linha sempre no final BLOCO QUE CONTROLA O TIMER!
-  }
+  http.end();  // importante!
+  return payload;
 }
 
 void eti(int num) {
-  // ColeSeuTokenAqui ColeIDdoGrupoAqui TestandoEnvio
-  //Vamos obter a URL perguntando também ao github
-  String url = urlSite+"/sonda/?sensor=" + String(idSensor) + "&valor=" + String(num);
+  String url = urlSite + "/sonda/?sensor=" + String(idSensor) + "&valor=" + String(num);
   Serial.println(wget(url));
-}
-
-/* Conexão com o broker e também servirá para reestabelecer a conexão caso caia */
-void conectar_broker() {
-  int8_t ret;
-
-  if (mqtt.connected()) {
-    return;
-  }
-
-  Serial.println("Conectando-se ao broker mqtt...");
-
-  uint8_t num_tentativas = 3;
-  while ((ret = mqtt.connect()) != 0) {
-    Serial.println(mqtt.connectErrorString(ret));
-    Serial.println("Falha ao se conectar. Tentando se reconectar em 5 segundos.");
-    mqtt.disconnect();
-    delay(5000);
-    num_tentativas--;
-    if (num_tentativas == 0) {
-      Serial.println("Provavelmente não tem internet.");
-      break;
-    }
-  }
-
-  Serial.println("Conectado ao broker com sucesso.");
-}
-
-void callback() {
-  Adafruit_MQTT_Subscribe *subscription;
-  while ((subscription = mqtt.readSubscription(5000))) {
-    if (subscription == &wifiTime) {
-      Serial.print(F("Got: "));
-      Serial.println((char *)wifiTime.lastread);
-    }
-  }
 }
 
 void sonar() {
@@ -291,7 +186,6 @@ void sonar() {
   distance > alturaAgua ? progresso = alturaAgua : progresso = distance;
   progresso = 100 * progresso / alturaAgua;
   progresso = 100 - progresso;
-
 }
 
 void tela() {
@@ -304,12 +198,9 @@ void tela() {
   display.setFont(ArialMT_Plain_10);
   display.drawString(64, 14, String(minimo));
   display.drawString(64, 28, String(maximo));
-  //display.drawString(0, 40, String(minimo));
-  //display.drawString(60, 40, String(maximo));
-  display.drawString(90, 19, String(progresso));
+  display.drawString(90, 19, String(progresso) + "%");
   display.drawProgressBar(0, 40, 127, 22, progresso);
   display.display();
-  delay(500);
 }
 
 void IoT() {
@@ -317,60 +208,113 @@ void IoT() {
   if ((millis() - lastTime) > timerDelay) {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("HORA DE TAREFAS DA WEB");
-
-      // Lê o que tiver de novo na Adafruit
-      callback();
-      
       String msg = nomeDaSonda + " -> Distancia do Sensor: " + String(distance) + "cm";
-      telegramLog(msg);
       eti(distance);
-
-      conectar_broker();
       getParametrosRemotos();
-
-      if (!sonar02.publish(progresso)){
-        Serial.println("Erro ao publicar na Adafruit");
-      } else {
-        Serial.println("Publicado na Adafruit");
-      }
-
-      if (progresso < nivelAlerta) {
-        String msg = nomeDaSonda + " -> NIVEL DE ÁGUA ABAIXO DO ESPERADO! => Reservatório está em " + String(progresso) + "%";
-        telegramAlarm(msg);
-      }
-      //Serial.println(String(sonar01.publish(distance)));
-      lastTime = millis(); // Esta linha sempre no final BLOCO QUE CONTROLA O TIMER!
-
+      lastTime = millis();
     }
   }
 }
 
-void internet(){
+void internet() {
   if (WiFi.status() == WL_CONNECTED) {
-    StatusInternet = "NaRede!"+WiFi.localIP().toString();
+    StatusInternet = "NaRede!" + WiFi.localIP().toString();
+    Serial.println("Conectado com IP: ");
+    Serial.println(WiFi.localIP());
     return;
   } else {
     StatusInternet = "Sem Wifi...";
-    WiFi.begin(ssid, password);
-    Serial.println("Conectando na rede WiFi");
-    int i = 0;
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-      if (i++ > 10) {
-        break;
-      }
-
-    }
-    Serial.println("Conectado com IP: ");
-    Serial.println(WiFi.localIP());
+    return;
   }
 }
 
-void getParametrosRemotos(){
-      timerDelay = wget(IntervaloDePush).toInt();
-      nivelAlerta = wget(nivelAlertaTelegram).toInt();
-      urlSite = wget(novoUrlSite);
-      Serial.println(timerDelay);
-      Serial.println(nivelAlerta);
+void getParametrosRemotos() {
+  timerDelay = wget(IntervaloDePush).toInt();
+  nivelAlerta = wget(nivelAlertaTelegram).toInt();
+  urlSite = wget(novoUrlSite);
+  Serial.println(timerDelay);
+  Serial.println(nivelAlerta);
+}
+
+String getMacSuffix() {
+  uint8_t mac[6];
+  WiFi.macAddress(mac); // Obtém o endereço MAC
+  
+  char suffix[7]; // 6 caracteres hex + null terminator
+  sprintf(suffix, "%02X%02X%02X", mac[3], mac[4], mac[5]);
+  return String(suffix);
+}
+
+void startAccessPoint() {
+// Configuração do IP
+  IPAddress apIP(192, 168, 40, 1);
+  IPAddress gateway(192, 168, 40, 1);
+  IPAddress subnet(255, 255, 255, 0);
+  
+  // Aplica a configuração de IP
+  WiFi.softAPConfig(apIP, gateway, subnet);
+  
+  // Cria SSID único baseado no MAC
+  String apSsid = "Sensor_" + getMacSuffix();
+  const char* apPassword = "12345678"; // Senha do AP
+  
+  // Inicia o Access Point
+  if(WiFi.softAP(apSsid.c_str(), apPassword)) {
+    Serial.println("Access Point iniciado com sucesso");
+    Serial.print("SSID: ");
+    Serial.println(apSsid);
+    Serial.print("IP: ");
+    Serial.println(WiFi.softAPIP());
+    Serial.print("MAC: ");
+    Serial.println(WiFi.softAPmacAddress());
+  } else {
+    Serial.println("Falha ao iniciar Access Point");
   }
+  Serial.println("Acesse http://192.168.40.1 para configurar.");
+}
+
+Config loadConfig() {
+  Config cfg;
+  prefs.begin("wifi-config", true); // true = read-only
+  cfg.ssid = prefs.getString("ssid", "TAIFIBRA-BLOCO B");
+  cfg.pass = prefs.getString("pass", "taifibratelecom");
+  cfg.sensorId = prefs.getString("sensorId", "4");
+  prefs.end();
+  return cfg;
+}
+
+void saveConfig(String ssid, String pass, String sensorId) {
+  prefs.begin("wifi-config", false);
+  prefs.putString("ssid", ssid);
+  prefs.putString("pass", pass);
+  prefs.putString("sensorId", sensorId);
+  prefs.end();
+}
+
+void handleRoot() {
+  server.send(200, "text/html", R"rawliteral(
+    <html><body>
+    <form action="/save" method="GET">
+      SSID: <input name="ssid"><br>
+      Senha: <input name="pass"><br>
+      ID Sensor: <input name="id"><br>
+      <input type="submit" value="Salvar">
+    </form>
+    </body></html>
+  )rawliteral");
+}
+
+void handleSave() {
+  String ssid = server.arg("ssid");
+  String pass = server.arg("pass");
+  String sensorId = server.arg("id");
+  saveConfig(ssid, pass, sensorId);
+  server.send(200, "text/plain", "Salvo! Reinicie o dispositivo.");
+}
+
+void setupWebServer() {
+  server.on("/", handleRoot);
+  server.on("/save", handleSave);
+  server.begin();
+  Serial.println("Servidor Web iniciado");
+}
