@@ -73,7 +73,7 @@ int progresso = 0;      // Calculo da % da barra de progresso
 // Configurações de rede
 unsigned long lastTime = 0;
 unsigned long lastTimeAlert = 0;
-unsigned long timerDelay = 60000; // 60 segundos
+unsigned long timerDelay = 15000; // 60 segundos
 unsigned long timerAlerta = 600000; // 10 minutos
 unsigned long nivelAlerta = 80; // 80%
 String StatusInternet = "Sem Wifi...";
@@ -400,10 +400,11 @@ void IoT() {
   if ((millis() - lastTime) > timerDelay) {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("HORA DE TAREFAS DA WEB");
-      String msg = nomeDaSonda + " -> Distancia do Sensor: " + String(distance) + "cm";
       eti(distance);
       getParametrosRemotos();
       lastTime = millis();
+    }else{
+      Serial.println("HORA DE TAREFAS DA WEB MAS ESTOU SEM INTERNET");
     }
   }
 }
