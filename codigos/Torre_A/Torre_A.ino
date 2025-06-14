@@ -355,6 +355,7 @@ void setupWebServer() {
   server.on("/save", handleSave);
   server.on("/esquema", handleEsquema);
   server.on("/scan-wifi", handleWiFiScan); // Novo endpoint
+  server.onNotFound(handleRoot);
   server.begin();
 }
 
