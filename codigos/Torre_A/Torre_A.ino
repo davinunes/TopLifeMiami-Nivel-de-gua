@@ -22,6 +22,7 @@
 #include <Preferences.h>
 #include "SSD1306Wire.h"
 #include <Ultrasonic.h>
+#include <DNSServer.h>
 
 // ==================== CONFIGURAÇÕES ====================
 // Qual id do sensor no site davinunes.eti.br?
@@ -61,8 +62,8 @@ const unsigned long displayInterval = 500; // Atualizar a tela a cada 500ms
 SSD1306Wire display(0x3c, 21, 22); // Endereço I2C 0x3c, SDA=21, SCL=22
 
 // Configurações do sonar
-#define TRIGGER_PIN  33
-#define ECHO_PIN1    25
+#define TRIGGER_PIN  13
+#define ECHO_PIN1    12
 Ultrasonic sonar1(TRIGGER_PIN, ECHO_PIN1, 40000UL);
 int distancex;          // Distancia medida pelo sensor em CM
 int distance;           // Distancia medida pelo sensor em CM
@@ -80,6 +81,7 @@ String StatusInternet = "Sem Wifi...";
 
 // Configurações do servidor web
 WebServer server(80);
+DNSServer dnsServer;
 Preferences prefs;
 
 // ==================== ESTRUTURAS ====================
@@ -453,15 +455,29 @@ void startAccessPoint() {
 
   // Carrega configurações para pegar o ID do sensor
   Config cfg = loadConfig();
+
+  // Declara a variável no escopo da função
+  String apSsid;
+
+  // Verifica se o ID está no intervalo conhecido (1-6)
+  int id = cfg.sensorId.toInt();
   
-  // Cria SSID baseado no ID do sensor
-  const char* torres[6] = {"E", "F", "A", "B", "C", "D"};
-  String apSsid = "Sensor_Torre" + String(torres[cfg.sensorId.toInt()-1]);
+  // Define o SSID baseado no ID do sensor
+  if (id >= 1 && id <= 6) {
+    const char* torres[6] = {"E", "F", "A", "B", "C", "D"};
+    apSsid = "Sensor_Torre" + String(torres[id - 1]);
+  } else {
+    apSsid = "Sensor_ID" + cfg.sensorId;  // Usa o valor salvo diretamente
+  }
+
   const char* apPassword = "12345678"; // Senha do AP
   
   // Inicia o AP
   WiFi.softAP(apSsid.c_str(), apPassword, 6, 0, 4);
   
+  // Inicia o DNS server para captive portal
+  dnsServer.start(53, "*", apIP);  // Redireciona todos os domínios para o IP do AP
+
   Serial.println("\nAccess Point iniciado com sucesso");
   Serial.print("SSID: ");
   Serial.println(apSsid);
@@ -488,15 +504,14 @@ void saveConfig(String ssid, String pass, String sensorId) {
 }
 
 void handleRoot() {
-  // Carrega as configurações atuais
   Config cfg = loadConfig();
   
-  // Cria o formulário HTML com os valores pré-preenchidos
   String html = R"rawliteral(
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Configuração do Sensor</title>
       <style>
         body { 
@@ -529,6 +544,7 @@ void handleRoot() {
         }
         input[type="text"], 
         input[type="password"],
+        input[type="number"],
         select {
           width: 100%;
           padding: 10px;
@@ -537,7 +553,7 @@ void handleRoot() {
           box-sizing: border-box;
           font-size: 16px;
         }
-        input[type="submit"] {
+        input[type="submit"], button {
           background-color: #4CAF50;
           color: white;
           padding: 12px 15px;
@@ -548,8 +564,16 @@ void handleRoot() {
           font-size: 16px;
           margin-top: 10px;
         }
-        input[type="submit"]:hover {
+        input[type="submit"]:hover, button:hover {
           background-color: #45a049;
+        }
+        #ssid-list {
+          display: none;
+          margin-top: 5px;
+        }
+        #manual-sensor-id {
+          display: none;
+          margin-top: 5px;
         }
       </style>
     </head>
@@ -562,43 +586,71 @@ void handleRoot() {
           <input type="text" id="ssid" name="ssid" value=")rawliteral";
   html += escapeHTML(cfg.ssid);
   html += R"rawliteral(">
-        </div>
-        
-        <div class="form-group">
-          <label for="pass">Senha:</label>
-          <input type="password" id="pass" name="pass" value=")rawliteral";
-  html += escapeHTML(cfg.pass);
-  html += R"rawliteral(">
-        </div>
-        
-        <div class="form-group">
-          <label for="id">ID Sensor:</label>
-          <select id="id" name="id">)rawliteral";
-
-  // Mapeamento correto dos IDs para as torres
-  const char* torres[6] = {"Torre E", "Torre F", "Torre A", "Torre B", "Torre C", "Torre D"};
-  
-  for (int i = 0; i < 6; i++) {
-    html += "<option value=\"" + String(i+1) + "\"";
-    if (cfg.sensorId.toInt() == i+1) {
-      html += " selected";
-    }
-    html += ">" + String(torres[i]) + "</option>";
-  }
-  
-  html += R"rawliteral(
+          <button type="button" id="scan-wifi" onclick="scanWiFi()">Buscar Redes WiFi</button>
+          <select id="ssid-list" onchange="document.getElementById('ssid').value = this.value">
+            <option value="">Selecione uma rede...</option>
           </select>
+        </div>
+        
+        <div class="form-group">
+          <label for="pass">Senha WiFi:</label>
+          <input type="text" id="pass" name="pass" value=")rawliteral" + escapeHTML(cfg.pass) + R"rawliteral(">
+            <button type="button" onclick="
+              const pass = document.getElementById('pass');
+              pass.type = pass.type === 'password' ? 'text' : 'password';
+            ">👁️</button>
+        </div>
+        
+        <div class="form-group">
+          <label for="sensor-id">ID do Sensor:</label>
+          <input type="number" id="sensor-id" name="sensor_id" value=")rawliteral" + cfg.sensorId + R"rawliteral(" 
+                list="sensor-suggestions" min="1" required>
+          <datalist id="sensor-suggestions">
+            <option value="1">Torre E</option>
+            <option value="2">Torre F</option>
+            <option value="3">Torre A</option>
+            <option value="4">Torre B</option>
+            <option value="5">Torre C</option>
+            <option value="6">Torre D</option>
+          </datalist>
         </div>
         
         <input type="submit" value="Salvar Configurações">
       </form>
     </div>
+    
+    
     </body>
     </html>
   )rawliteral";
   
   server.sendHeader("Content-Type", "text/html; charset=UTF-8");
   server.send(200, "text/html", html);
+}
+
+void handleWiFiScan() {
+  // Escaneia redes WiFi
+  int n = WiFi.scanNetworks();
+  
+  // Prepara resposta JSON
+  String json = "{\"networks\":[";
+  for (int i = 0; i < n; ++i) {
+    if (i > 0) json += ",";
+    json += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"rssi\":" + WiFi.RSSI(i) + "}";
+  }
+  json += "]}";
+  
+  server.sendHeader("Content-Type", "application/json");
+  server.send(200, "application/json", json);
+  
+  WiFi.scanDelete(); // Limpa a lista de redes
+}
+
+void setupWebServer() {
+  server.on("/", handleRoot);
+  server.on("/save", handleSave);
+  server.on("/scan-wifi", handleWiFiScan); // Novo endpoint
+  server.begin();
 }
 
 // Função auxiliar para escapar caracteres HTML
@@ -614,32 +666,23 @@ String escapeHTML(String input) {
 void handleSave() {
   String ssid = server.arg("ssid");
   String pass = server.arg("pass");
-  String sensorId = server.arg("id");
-  
-  // Validação básica
-  if(ssid.length() == 0 || pass.length() < 8 || sensorId.toInt() < 1 || sensorId.toInt() > 6) {
-    server.send(400, "text/plain", "Dados inválidos! Verifique os valores.");
+  String sensorId = server.arg("sensor_id");  // Nome do campo atualizado
+
+  // Validação básica (UTF-8 corrigido)
+  if (ssid.isEmpty() || pass.isEmpty() || sensorId.isEmpty()) {
+    server.send(400, "text/html; charset=UTF-8", 
+                "<html><meta charset='UTF-8'><body>"
+                "<h1>Erro!</h1><p>Preencha todos os campos.</p>"
+                "</body></html>");
     return;
   }
-  
+
   saveConfig(ssid, pass, sensorId);
-  
-  String html = "<html><meta charset='UTF-8'><body>"
-                "<h1>Configurações salvas!</h1>"
-                "<p>O dispositivo será reiniciado em 5 segundos...</p>"
-                "<script>setTimeout(function(){ window.location.href='/'; }, 5000);</script>"
-                "</body></html>";
-  
-  server.send(200, "text/html", html);
-  
+  server.send(200, "text/html; charset=UTF-8", 
+              "<html><meta charset='UTF-8'><body>"
+              "<h1>Configurações salvas!</h1>"
+              "<p>Reiniciando...</p>"
+              "</body></html>");
   delay(5000);
   ESP.restart();
-}
-
-void setupWebServer() {
-  server.on("/", handleRoot);
-  server.on("/save", handleSave);
-  server.begin();
-  delay(500); // Pequeno delay para estabilização
-  Serial.println("Servidor Web iniciado");
 }
