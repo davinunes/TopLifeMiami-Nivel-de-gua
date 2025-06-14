@@ -14,7 +14,7 @@
 
 */
 
-// ==================== BIBLIOTECAS ====================
+
 #include <WiFi.h>
 #include "esp_wifi.h"
 #include <HTTPClient.h>
@@ -24,30 +24,16 @@
 #include <Ultrasonic.h>
 #include <DNSServer.h>
 
+
 // ==================== CONFIGURAÇÕES ====================
-// Qual id do sensor no site davinunes.eti.br?
-/*
- * 1 - Torre E
- * 2 - Torre F
- * 3 - Torre A
- * 4 - Torre B
- * 5 - Torre C
- * 6 - Torre D
- */
+#define LED_PIN 2  // Pino do LED onboard (normalmente GPIO2 para ESP32)
+#define AP_MODE_DURATION 120000  // 2 minutos em modo AP
+
+// Configurações do sensor
 int idSensor = 3; 
-
-// A que distancia a sonda está do nivel máximo de água?
 int distanciaSonda = 0; 
-
-// Qual a altura maxima da coluna de água? (Não considerar a distancia da Sonda)
 int alturaAgua = 240; 
-
-// Qual Nome da Sonda nas mensagens do Telegram?
 String nomeDaSonda = "Torre A Reservatório 01";
-
-// Configurações WiFi padrão
-const char* ssid = "TAIFIBRA-BLOCO A"; 
-const char* password = "taifibratelecom"; 
 
 // URLs para configuração remota
 String IntervaloDePush = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/updateTime";
@@ -56,33 +42,33 @@ String novoUrlSite = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-N
 String urlSite = "h2o-miami.davinunes.eti.br";
 
 // ==================== VARIÁVEIS GLOBAIS ====================
-// Configurações do display
-unsigned long lastDisplayUpdate = 0;
-const unsigned long displayInterval = 500; // Atualizar a tela a cada 500ms
+// Display
 SSD1306Wire display(0x3c, 21, 22); // Endereço I2C 0x3c, SDA=21, SCL=22
 
-// Configurações do sonar
+// Sonar
 #define TRIGGER_PIN  13
 #define ECHO_PIN1    12
 Ultrasonic sonar1(TRIGGER_PIN, ECHO_PIN1, 40000UL);
-int distancex;          // Distancia medida pelo sensor em CM
-int distance;           // Distancia medida pelo sensor em CM
-int minimo = 0;         // Menor distancia já medida
-int maximo = 0;         // Maior distancia já medida
-int progresso = 0;      // Calculo da % da barra de progresso
+int distance = 0;  // Distância medida pelo sensor em CM
 
-// Configurações de rede
-unsigned long lastTime = 0;
-unsigned long lastTimeAlert = 0;
-unsigned long timerDelay = 15000; // 60 segundos
-unsigned long timerAlerta = 600000; // 10 minutos
-unsigned long nivelAlerta = 80; // 80%
-String StatusInternet = "Sem Wifi...";
-
-// Configurações do servidor web
+// Rede
 WebServer server(80);
 DNSServer dnsServer;
 Preferences prefs;
+String StatusInternet = "Sem Wifi...";
+
+// Temporizadores
+unsigned long lastDisplayUpdate = 0;
+const unsigned long displayInterval = 500; // Atualizar a tela a cada 500ms
+unsigned long lastTime = 0;
+unsigned long timerDelay = 15000; // 15 segundos
+unsigned long bootTime = 0;
+bool inAPMode = false;
+
+// LED
+unsigned long lastLedToggle = 0;
+bool ledState = false;
+unsigned long ledInterval = 1000; // Intervalo padrão para piscar (1 segundo)
 
 // ==================== ESTRUTURAS ====================
 struct Config {
@@ -92,27 +78,30 @@ struct Config {
 };
 
 // ==================== PROTÓTIPOS DE FUNÇÕES ====================
-String wget(String url);
-void eti(int num);
+void setupWiFi();
+void switchToAPMode();
+void switchToStationMode();
+void updateLed();
+void handleWiFiEvent(WiFiEvent_t event);
 void sonar();
 void tela();
 void IoT();
-void internet();
 void getParametrosRemotos();
-String getMacSuffix();
-void startAccessPoint();
 Config loadConfig();
 void saveConfig(String ssid, String pass, String sensorId);
+void startAccessPoint();
+void setupWebServer();
 void handleRoot();
 void handleSave();
-void setupWebServer();
+String escapeHTML(String input);
 
 // ==================== SETUP ====================
 void setup() {
   Serial.begin(115200);
-  delay(1000);
-
-  // Inicializa o display primeiro para feedback visual
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW); // Inicia com LED apagado
+  
+  // Inicializa display
   display.init();
   display.flipScreenVertically();
   display.clear();
@@ -121,47 +110,17 @@ void setup() {
   display.drawString(0, 0, "Iniciando...");
   display.display();
 
-  // Carrega configurações salvas
+  // Carrega configurações
   Config cfg = loadConfig();
-  idSensor = cfg.sensorId.toInt(); // Atualiza o ID global
+  idSensor = cfg.sensorId.toInt();
 
   // Configura eventos WiFi
-  WiFi.onEvent(WiFiEvent);
+  WiFi.onEvent(handleWiFiEvent);
 
-  // Tentativa de conexão WiFi
-  int tentativas = 0;
-  bool conectado = false;
+  // Inicia em modo AP
+  bootTime = millis();
+  switchToAPMode();
   
-  while(tentativas < 5 && !conectado) {
-    display.clear();
-    display.drawString(0, 0, "Conectando WiFi");
-    display.drawString(0, 18, "Tentativa " + String(tentativas+1));
-    display.display();
-    
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
-    
-    unsigned long startTime = millis();
-    while (millis() - startTime < 15000 && WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-    }
-    
-    if(WiFi.status() == WL_CONNECTED) {
-      conectado = true;
-      StatusInternet = "Conectado: " + WiFi.localIP().toString();
-    } else {
-      tentativas++;
-    }
-  }
-
-  if(!conectado) {
-    // Modo AP após falha
-    WiFi.mode(WIFI_AP);
-    startAccessPoint();
-    StatusInternet = "Modo AP: " + WiFi.softAPIP().toString();
-  }
-
   // Configura servidor web
   setupWebServer();
   Serial.println("Setup completo");
@@ -169,10 +128,6 @@ void setup() {
 
 // ==================== LOOP PRINCIPAL ====================
 void loop() {
-  static unsigned long lastModeCheck = 0;
-  static unsigned long lastStationActivity = 0;
-  static bool inAPMode = (WiFi.getMode() & WIFI_AP);
-
   // Atualizações regulares
   if (millis() - lastDisplayUpdate >= displayInterval) {
     sonar();
@@ -181,184 +136,133 @@ void loop() {
     lastDisplayUpdate = millis();
   }
   
-  // Verificação periódica do modo
-  if (millis() - lastModeCheck >= 60000) { // A cada 1 minuto
-    lastModeCheck = millis();
-    
-    if(inAPMode) {
-      // Se no modo AP e ninguém conectado por 2 minutos, tenta STA novamente
-      wifi_sta_list_t stationList;
-      if(esp_wifi_ap_get_sta_list(&stationList) == ESP_OK) {
-        if(stationList.num > 0) {
-          lastStationActivity = millis();
-        } else if(millis() - lastStationActivity > 120000) { // 2 minutos
-          switchToStationMode();
-          inAPMode = false;
-        }
-      }
-    } else {
-      // Se no modo STA e desconectado, verifica
-      if(WiFi.status() != WL_CONNECTED) {
-        static int failedAttempts = 0;
-        failedAttempts++;
-        
-        if(failedAttempts >= 5) {
-          switchToAPMode();
-          inAPMode = true;
-          failedAttempts = 0;
-        }
-      }
-    }
+  // Verifica se deve sair do modo AP após 2 minutos
+  if (inAPMode && (millis() - bootTime > AP_MODE_DURATION)) {
+    switchToStationMode();
   }
   
+  // Atualiza estado do LED
+  updateLed();
+  
+  // Trata requisições do servidor web
   server.handleClient();
+  
+  // Se estiver em modo AP, trata também DNS
+  if (inAPMode) {
+    dnsServer.processNextRequest();
+  }
 }
 
+// ==================== FUNÇÕES DE REDE ====================
 void switchToAPMode() {
-  WiFi.disconnect();
+  WiFi.disconnect(true);
   WiFi.mode(WIFI_AP);
   startAccessPoint();
   StatusInternet = "Modo AP: " + WiFi.softAPIP().toString();
-  Serial.println("Alternado para modo AP");
+  inAPMode = true;
+  
+  // LED aceso constantemente no modo AP
+  ledInterval = 0;
+  digitalWrite(LED_PIN, HIGH);
+  
+  Serial.println("Modo AP ativado");
 }
 
 void switchToStationMode() {
   Config cfg = loadConfig();
-  WiFi.disconnect();
+  WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
   WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
+  inAPMode = false;
   
-  unsigned long startTime = millis();
-  while(millis() - startTime < 10000 && WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    sonar();
-  }
+  // LED começa piscando devagar (modo desconectado)
+  ledInterval = 1000; // 1 segundo
   
-  if(WiFi.status() == WL_CONNECTED) {
-    StatusInternet = "Conectado: " + WiFi.localIP().toString();
-    Serial.println("Conectado como estação");
-  } else {
-    switchToAPMode();
-  }
+  Serial.println("Tentando conectar como estação...");
 }
 
-// ==================== FUNÇÕES ====================
-void WiFiEvent(WiFiEvent_t event) {
-  Serial.printf("[WiFi-event] event: %d - ", event);
+void startAccessPoint() {
+  WiFi.softAPdisconnect(true);
+  delay(100);
 
+  // Configuração do IP
+  IPAddress apIP(192, 168, 40, 1);
+  IPAddress gateway(192, 168, 40, 1);
+  IPAddress subnet(255, 255, 255, 0);
+  WiFi.softAPConfig(apIP, gateway, subnet);
+
+  // Cria SSID baseado no ID do sensor
+  Config cfg = loadConfig();
+  String apSsid;
+  int id = cfg.sensorId.toInt();
+  
+  if (id >= 1 && id <= 6) {
+    const char* torres[6] = {"E", "F", "A", "B", "C", "D"};
+    apSsid = "Sensor_Torre" + String(torres[id - 1]);
+  } else {
+    apSsid = "Sensor_ID" + cfg.sensorId;
+  }
+
+  WiFi.softAP(apSsid.c_str(), "12345678", 6, 0, 4);
+  dnsServer.start(53, "*", apIP);
+  
+  Serial.print("AP iniciado: ");
+  Serial.println(apSsid);
+}
+
+void handleWiFiEvent(WiFiEvent_t event) {
   switch(event) {
-    case ARDUINO_EVENT_WIFI_READY: 
-      Serial.println("WiFi interface ready");
-      break;
-    case ARDUINO_EVENT_WIFI_SCAN_DONE:
-      Serial.println("Completed scan for access points");
-      break;
-    case ARDUINO_EVENT_WIFI_STA_START:
-      Serial.println("WiFi client started");
-      break;
-    case ARDUINO_EVENT_WIFI_STA_STOP:
-      Serial.println("WiFi clients stopped");
-      break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
-      Serial.println("Connected to access point");
+      Serial.println("Conectado ao AP");
       break;
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      Serial.println("Disconnected from WiFi access point");
-      break;
-    case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE:
-      Serial.println("Authentication mode of access point has changed");
-      break;
+      
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-      Serial.print("Obtained IP address: ");
+      Serial.print("IP obtido: ");
       Serial.println(WiFi.localIP());
+      StatusInternet = "Conectado: " + WiFi.localIP().toString();
+      ledInterval = 250; // Piscar rápido quando conectado
       break;
-    case ARDUINO_EVENT_WIFI_STA_LOST_IP:
-      Serial.println("Lost IP address and IP address is reset to 0");
-      break;
-    case ARDUINO_EVENT_WIFI_AP_START:
-      Serial.println("WiFi access point started");
-      break;
-    case ARDUINO_EVENT_WIFI_AP_STOP:
-      Serial.println("WiFi access point stopped");
-      break;
-    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
-      Serial.println("Client connected");
-      break;
-    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
-      Serial.println("Client disconnected");
-      break;
-    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
-      Serial.println("Assigned IP address to client");
-      break;
-    case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED:
-      Serial.println("Received probe request");
-      break;
-    default: 
-      Serial.println("Unknown event");
-      break;
-  }
-}
-
-
-void printNetworkStatus() {
-  Serial.println("\n=== Status da Rede ===");
-  Serial.printf("Modo WiFi: %s\n", WiFi.getMode() == WIFI_AP_STA ? "AP+STA" : "AP");
-  
-  wifi_sta_list_t stationList;
-  if (esp_wifi_ap_get_sta_list(&stationList) == ESP_OK) {
-    if (stationList.num > 0) {
-      Serial.println("Dispositivos conectados no AP:");
-      for (int i = 0; i < stationList.num; i++) {
-        Serial.printf("  %d - MAC: %02X:%02X:%02X:%02X:%02X:%02X\n", 
-                     i+1,
-                     stationList.sta[i].mac[0], stationList.sta[i].mac[1],
-                     stationList.sta[i].mac[2], stationList.sta[i].mac[3],
-                     stationList.sta[i].mac[4], stationList.sta[i].mac[5]);
+      
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      Serial.println("Desconectado do WiFi");
+      StatusInternet = "Sem Wifi...";
+      ledInterval = 1000; // Piscar devagar quando desconectado
+      
+      // Se não estiver em modo AP, tenta reconectar
+      if (!inAPMode) {
+        static int failedAttempts = 0;
+        failedAttempts++;
+        
+        if (failedAttempts >= 5) {
+          switchToAPMode();
+          failedAttempts = 0;
+        } else {
+          WiFi.reconnect();
+        }
       }
-    } else {
-      Serial.println("Nenhum dispositivo conectado no AP");
-    }
-  } else {
-    Serial.println("Erro ao obter lista de estações");
+      break;
+      
+    default:
+      break;
+  }
+}
+
+// ==================== CONTROLE DO LED ====================
+void updateLed() {
+  if (ledInterval == 0) {
+    // Modo AP - LED aceso constantemente
+    digitalWrite(LED_PIN, HIGH);
+    return;
   }
   
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nConectado à rede WiFi:");
-    Serial.printf("SSID: %s\n", WiFi.SSID().c_str());
-    Serial.printf("IP Local: %s\n", WiFi.localIP().toString().c_str());
-    Serial.printf("Força do sinal: %d dBm\n", WiFi.RSSI());
-  } else {
-    Serial.println("\nNão conectado a rede WiFi");
+  if (millis() - lastLedToggle >= ledInterval) {
+    ledState = !ledState;
+    digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+    lastLedToggle = millis();
   }
-  Serial.println("=====================\n");
 }
 
-String wget(String url) {
-  HTTPClient http;
-  http.setTimeout(3000); // define timeout de 3s
-  http.begin(url);
-
-  int httpResponseCode = http.GET();
-  String payload;
-
-  if (httpResponseCode > 0) {
-    payload = http.getString();
-  } else {
-    Serial.print("Erro HTTP: ");
-    Serial.println(httpResponseCode);
-    payload = "erro";
-  }
-
-  http.end();  // importante!
-  return payload;
-}
-
-void eti(int num) {
-  String url = urlSite + "/sonda/?sensor=" + String(idSensor) + "&valor=" + String(num);
-  Serial.println(url);
-  Serial.println(wget(url));
-}
-
+// ==================== FUNÇÕES DO SENSOR ====================
 void sonar() {
   distance = sonar1.read();
   distance = distance - distanciaSonda;
@@ -369,20 +273,20 @@ void sonar() {
 void tela() {
   display.clear();
   
-  // 1ª Linha: Modo e Status (fonte 10)
+  // 1ª Linha: Modo e Status
   display.setFont(ArialMT_Plain_16);
-  String header = String((WiFi.getMode() & WIFI_AP) ? "A" : "E") + ":";
+  String header = String(inAPMode ? "A" : "E") + ":";
   header += (WiFi.status() == WL_CONNECTED) ? 
-            ((WiFi.getMode() & WIFI_AP) ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) : 
+            (inAPMode ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) : 
             "Sem Conexão";
   display.drawString(0, 0, header);
 
-  // 2ª Linha: Nome da Rede/AP (fonte 10)
-  String rede = (WiFi.getMode() & WIFI_AP) ? "AP: Torre " + getTorreLetter() 
-                                         : "R: " + WiFi.SSID().substring(0, 16);
+  // 2ª Linha: Nome da Rede/AP
+  String rede = inAPMode ? "AP: Torre " + String(idSensor) 
+                       : "R: " + WiFi.SSID().substring(0, 16);
   display.drawString(0, 18, rede);
 
-  // Valor principal centralizado (fonte 24)
+  // Valor principal centralizado
   display.setFont(ArialMT_Plain_24);
   String leitura = String(distance) + " cm";
   int textWidth = display.getStringWidth(leitura);
@@ -391,106 +295,48 @@ void tela() {
   display.display();
 }
 
-String getTorreLetter() {
-  const char* torres[6] = {"E", "F", "A", "B", "C", "D"};
-  Config cfg = loadConfig();
-  return String(torres[cfg.sensorId.toInt()-1]);
-}
-
 void IoT() {
-  internet();
   if ((millis() - lastTime) > timerDelay) {
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("HORA DE TAREFAS DA WEB");
-      eti(distance);
+      Serial.println("Enviando dados...");
+      //eti(distance); // Descomente se necessário
       getParametrosRemotos();
       lastTime = millis();
-    }else{
-      Serial.println("HORA DE TAREFAS DA WEB MAS ESTOU SEM INTERNET");
+    } else {
+      Serial.println("Sem conexão para enviar dados");
     }
   }
 }
 
-void internet() {
-  if (WiFi.status() == WL_CONNECTED) {
-    StatusInternet = "NaRede!" + WiFi.localIP().toString();
-    Serial.println("Conectado com IP: ");
-    Serial.println(WiFi.localIP());
-    return;
-  } else {
-    StatusInternet = "Sem Wifi...";
-    return;
-  }
-}
-
 void getParametrosRemotos() {
-  timerDelay = wget(IntervaloDePush).toInt();
-  nivelAlerta = wget(nivelAlertaTelegram).toInt();
-  urlSite = wget(novoUrlSite);
-  Serial.println(timerDelay);
-  Serial.println(nivelAlerta);
-}
-
-String getMacSuffix() {
-  uint8_t mac[6];
-  WiFi.macAddress(mac); // Obtém o endereço MAC
+  HTTPClient http;
   
-  char suffix[7]; // 6 caracteres hex + null terminator
-  sprintf(suffix, "%02X%02X%02X", mac[3], mac[4], mac[5]);
-  return String(suffix);
-}
-
-void startAccessPoint() {
-  // Desconecta primeiro se já estiver em modo AP
-  if (WiFi.getMode() & WIFI_AP) {
-    WiFi.softAPdisconnect(true);
-    delay(100);
+  http.begin(IntervaloDePush);
+  if (http.GET() == HTTP_CODE_OK) {
+    timerDelay = http.getString().toInt();
   }
-
-  // Configuração do IP
-  IPAddress apIP(192, 168, 40, 1);
-  IPAddress gateway(192, 168, 40, 1);
-  IPAddress subnet(255, 255, 255, 0);
-  WiFi.softAPConfig(apIP, gateway, subnet);
-
-  // Carrega configurações para pegar o ID do sensor
-  Config cfg = loadConfig();
-
-  // Declara a variável no escopo da função
-  String apSsid;
-
-  // Verifica se o ID está no intervalo conhecido (1-6)
-  int id = cfg.sensorId.toInt();
+  http.end();
   
-  // Define o SSID baseado no ID do sensor
-  if (id >= 1 && id <= 6) {
-    const char* torres[6] = {"E", "F", "A", "B", "C", "D"};
-    apSsid = "Sensor_Torre" + String(torres[id - 1]);
-  } else {
-    apSsid = "Sensor_ID" + cfg.sensorId;  // Usa o valor salvo diretamente
+  http.begin(nivelAlertaTelegram);
+  if (http.GET() == HTTP_CODE_OK) {
+    //nivelAlerta = http.getString().toInt(); // Descomente se necessário
   }
-
-  const char* apPassword = "12345678"; // Senha do AP
+  http.end();
   
-  // Inicia o AP
-  WiFi.softAP(apSsid.c_str(), apPassword, 6, 0, 4);
-  
-  // Inicia o DNS server para captive portal
-  dnsServer.start(53, "*", apIP);  // Redireciona todos os domínios para o IP do AP
-
-  Serial.println("\nAccess Point iniciado com sucesso");
-  Serial.print("SSID: ");
-  Serial.println(apSsid);
-  Serial.print("IP: ");
-  Serial.println(WiFi.softAPIP());
+  http.begin(novoUrlSite);
+  if (http.GET() == HTTP_CODE_OK) {
+    urlSite = http.getString();
+  }
+  http.end();
 }
 
+// ==================== FUNÇÕES DE CONFIGURAÇÃO ====================
 Config loadConfig() {
   Config cfg;
-  prefs.begin("wifi-config", true); // true = read-only
+  prefs.begin("wifi-config", true);
   cfg.ssid = prefs.getString("ssid", "TAIFIBRA-BLOCO A");
   cfg.pass = prefs.getString("pass", "taifibratelecom");
-  cfg.sensorId = prefs.getString("sensorId", "4");
+  cfg.sensorId = prefs.getString("sensorId", "3");
   prefs.end();
   return cfg;
 }
@@ -501,6 +347,15 @@ void saveConfig(String ssid, String pass, String sensorId) {
   prefs.putString("pass", pass);
   prefs.putString("sensorId", sensorId);
   prefs.end();
+}
+
+// ==================== SERVIDOR WEB ====================
+void setupWebServer() {
+  server.on("/", handleRoot);
+  server.on("/save", handleSave);
+  server.on("/esquema", handleEsquema);
+  server.on("/scan-wifi", handleWiFiScan); // Novo endpoint
+  server.begin();
 }
 
 void handleRoot() {
@@ -568,11 +423,17 @@ void handleRoot() {
           background-color: #45a049;
         }
         #ssid-list {
-          display: none;
+          width: 100%;
           margin-top: 5px;
+          display: none;
         }
         #manual-sensor-id {
           display: none;
+          margin-top: 5px;
+        }
+        .loading {
+          display: none;
+          text-align: center;
           margin-top: 5px;
         }
       </style>
@@ -587,6 +448,7 @@ void handleRoot() {
   html += escapeHTML(cfg.ssid);
   html += R"rawliteral(">
           <button type="button" id="scan-wifi" onclick="scanWiFi()">Buscar Redes WiFi</button>
+          <div id="loading" class="loading">Buscando redes...</div>
           <select id="ssid-list" onchange="document.getElementById('ssid').value = this.value">
             <option value="">Selecione uma rede...</option>
           </select>
@@ -614,17 +476,49 @@ void handleRoot() {
         <input type="submit" value="Salvar Configurações">
 
         <div class="form-group">
-          <button type="button" onclick="
-              window.location = '/esquema';
-            ">Esquema Elétrico</button>
+          <button type="button" onclick="window.location = '/esquema'">Esquema Elétrico</button>
         </div>
-
       </form>
-
-
     </div>
-    
-    
+
+    <script>
+      function scanWiFi() {
+        const ssidList = document.getElementById('ssid-list');
+        const loading = document.getElementById('loading');
+        const scanButton = document.getElementById('scan-wifi');
+        
+        // Mostra loading e desabilita o botão
+        loading.style.display = 'block';
+        ssidList.style.display = 'none';
+        scanButton.disabled = true;
+        
+        // Faz a requisição para o endpoint de scan
+        fetch('/scan-wifi')
+          .then(response => response.json())
+          .then(data => {
+            // Limpa a lista atual
+            ssidList.innerHTML = '<option value="">Selecione uma rede...</option>';
+            
+            // Adiciona cada rede encontrada
+            data.networks.forEach(network => {
+              const option = document.createElement('option');
+              option.value = network.ssid;
+              option.textContent = network.ssid + ' (RSSI: ' + network.rssi + ')';
+              ssidList.appendChild(option);
+            });
+            
+            // Mostra a lista e esconde o loading
+            ssidList.style.display = 'block';
+            loading.style.display = 'none';
+            scanButton.disabled = false;
+          })
+          .catch(error => {
+            console.error('Erro ao buscar redes:', error);
+            loading.textContent = 'Erro ao buscar redes. Tente novamente.';
+            scanButton.disabled = false;
+          });
+      }
+    </script>
     </body>
     </html>
   )rawliteral";
@@ -889,24 +783,6 @@ void handleWiFiScan() {
   WiFi.scanDelete(); // Limpa a lista de redes
 }
 
-void setupWebServer() {
-  server.on("/", handleRoot);
-  server.on("/save", handleSave);
-  server.on("/esquema", handleEsquema);
-  server.on("/scan-wifi", handleWiFiScan); // Novo endpoint
-  server.begin();
-}
-
-// Função auxiliar para escapar caracteres HTML
-String escapeHTML(String input) {
-  input.replace("&", "&amp;");
-  input.replace("\"", "&quot;");
-  input.replace("'", "&#39;");
-  input.replace("<", "&lt;");
-  input.replace(">", "&gt;");
-  return input;
-}
-
 void handleSave() {
   String ssid = server.arg("ssid");
   String pass = server.arg("pass");
@@ -929,4 +805,13 @@ void handleSave() {
               "</body></html>");
   delay(5000);
   ESP.restart();
+}
+
+String escapeHTML(String input) {
+  input.replace("&", "&amp;");
+  input.replace("\"", "&quot;");
+  input.replace("'", "&#39;");
+  input.replace("<", "&lt;");
+  input.replace(">", "&gt;");
+  return input;
 }
