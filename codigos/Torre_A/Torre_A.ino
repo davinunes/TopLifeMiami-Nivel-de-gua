@@ -131,7 +131,7 @@ void loop() {
   // Atualizações regulares
   if (!inAPMode && millis() - lastDisplayUpdate >= displayInterval) {
     sonar();
-    tela();
+    
     IoT();
     lastDisplayUpdate = millis();
   }
@@ -151,6 +151,7 @@ void loop() {
   if (inAPMode) {
     dnsServer.processNextRequest();
   }
+  tela();
 }
 
 // ==================== FUNÇÕES DE REDE ====================
@@ -166,7 +167,7 @@ void switchToAPMode() {
   digitalWrite(LED_PIN, HIGH);
   
   Serial.println("Modo AP ativado");
-  display.drawString(0, 0, "Modo AP ativado");
+  
 }
 
 void switchToStationMode() {
@@ -180,7 +181,7 @@ void switchToStationMode() {
   ledInterval = 1000; // 1 segundo
   
   Serial.println("Tentando conectar como estação...");
-  display.drawString(0, 0, "Conectando...");
+  
 }
 
 void startAccessPoint() {
@@ -289,26 +290,59 @@ void sonar() {
 
 void tela() {
   display.clear();
-  
-  // 1ª Linha: Modo e Status
-  display.setFont(ArialMT_Plain_16);
-  String header = String(inAPMode ? "A" : "E") + ":";
-  header += (WiFi.status() == WL_CONNECTED) ? 
-            (inAPMode ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) : 
-            "Sem Conexão";
-  display.drawString(0, 0, header);
+  display.setTextAlignment(TEXT_ALIGN_LEFT); // Reseta o alinhamento para o padrao
 
-  // 2ª Linha: Nome da Rede/AP
-  String rede = inAPMode ? "AP: Torre " + String(idSensor) 
-                       : "R: " + WiFi.SSID().substring(0, 16);
-  display.drawString(0, 18, rede);
+  if (inAPMode) {
+    // --- TELA EXCLUSIVA PARA O MODO ACCESS POINT ---
+    // Muito mais informativa para o usuario que esta configurando.
 
-  // Valor principal centralizado
-  display.setFont(ArialMT_Plain_24);
-  String leitura = String(distance) + " cm";
-  int textWidth = display.getStringWidth(leitura);
-  display.drawString((130 - textWidth) / 2, 30, leitura);
+    // 1. Titulo
+    display.setFont(ArialMT_Plain_16);
+    display.setTextAlignment(TEXT_ALIGN_CENTER);
+    display.drawString(64, 0, "Modo Setup"); // Posição 64 é o centro de uma tela de 128px
 
+    // 2. Informacoes de Conexao
+    display.setFont(ArialMT_Plain_10);
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
+    display.drawString(0, 20, "Rede: " + WiFi.softAPSSID());
+    display.drawString(0, 32, "Senha: 12345678");
+
+    // 3. Status de Clientes
+    int clients = WiFi.softAPgetStationNum();
+    if (clients == 0) {
+      display.drawString(0, 44, "Aguardando conexao...");
+    } else {
+      // Mostra um feedback visual quando alguem conecta!
+      display.drawString(0, 44, "Clientes: " + String(clients) + " conectado(s)");
+    }
+
+  } else {
+    // --- TELA PARA O MODO ESTACAO (NORMAL) ---
+    // Layout um pouco mais limpo.
+
+    // 1. Titulo e Leitura do Sensor
+    display.setFont(ArialMT_Plain_16);
+    display.drawString(0, 0, "Sensor de Nivel");
+    
+    display.setTextAlignment(TEXT_ALIGN_RIGHT);
+    String leitura = String(distance) + " cm";
+    display.drawString(128, 16, leitura);
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
+
+    // 2. Status da Conexao WiFi
+    display.setFont(ArialMT_Plain_10);
+    if (WiFi.status() == WL_CONNECTED) {
+      display.drawString(0, 38, "Rede: " + WiFi.SSID());
+      display.drawString(0, 50, "IP: " + WiFi.localIP().toString());
+    } else {
+      display.drawString(0, 38, "Status: Sem WiFi");
+      // Pega o nome da rede que ele TENTARA conectar para dar um feedback melhor
+      Config cfg = loadConfig();
+      display.drawString(0, 50, "Tentando: " + cfg.ssid);
+    }
+  }
+
+  // Envia o buffer para a tela
   display.display();
 }
 
