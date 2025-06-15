@@ -24,6 +24,10 @@
 #include <Ultrasonic.h>
 #include <DNSServer.h>
 
+#include <Update.h>
+#include <ArduinoJson.h>
+
+#define FW_VERSION 1.1
 
 // ==================== CONFIGURAÇÕES ====================
 #define LED_PIN 2  // Pino do LED onboard (normalmente GPIO2 para ESP32)
@@ -40,6 +44,7 @@ String IntervaloDePush = "https://raw.githubusercontent.com/davinunes/TopLifeMia
 String nivelAlertaTelegram = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/nivelAlerta";
 String novoUrlSite = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/novoUrlSite";
 String urlSite = "h2o-miami.davinunes.eti.br";
+String urlVersao = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/refs/heads/main/parametros/version.json";
 
 // ==================== VARIÁVEIS GLOBAIS ====================
 // Display
@@ -352,6 +357,7 @@ void IoT() {
       Serial.println("Enviando dados...");
       //eti(distance); // Descomente se necessário
       getParametrosRemotos();
+      checkForUpdates();
       lastTime = millis();
     } else {
       Serial.println("Sem conexão para enviar dados");
@@ -894,4 +900,125 @@ String escapeHTML(String input) {
   input.replace("<", "&lt;");
   input.replace(">", "&gt;");
   return input;
+}
+
+void performUpdate(String url) {
+    display.clear();
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(0, 0, "Atualizacao encontrada!");
+    display.drawString(0, 12, "Baixando firmware...");
+    display.display();
+
+    HTTPClient http;
+    http.begin(url);
+    int httpCode = http.GET();
+
+    // --- INICIO DA LOGICA DE REDIRECIONAMENTO ---
+    // Verifica se o servidor respondeu com um codigo de redirecionamento
+    if (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
+        // Pega a nova URL do cabecalho "Location"
+        String newUrl = http.header("Location");
+        Serial.println("Redirecionado para: " + newUrl);
+        display.drawString(0, 24, "Redirecionando...");
+        display.display();
+
+        // Encerra a primeira requisicao e inicia uma nova com a URL correta
+        http.end();
+        http.begin(newUrl);
+        httpCode = http.GET(); // Faz a requisicao final
+    }
+    // --- FIM DA LOGICA DE REDIRECIONAMENTO ---
+
+    if (httpCode != HTTP_CODE_OK) {
+        Serial.printf("Erro no download, codigo: %d\n", httpCode);
+        display.clear();
+        display.drawString(0, 20, "Erro no download!");
+        display.drawString(0, 32, "Codigo: " + String(httpCode));
+        display.display();
+        http.end();
+        return;
+    }
+
+    // Se chegamos aqui, o download comecou. O resto da funcao continua igual.
+    int contentLength = http.getSize();
+    if (contentLength <= 0) {
+        Serial.println("Tamanho do conteudo invalido.");
+        display.drawString(0, 48, "Arquivo invalido!");
+        display.display();
+        http.end();
+        return;
+    }
+
+    bool canBegin = Update.begin(contentLength);
+    if (!canBegin) {
+        Serial.println("Nao ha espaco para atualizar.");
+        display.drawString(0, 48, "Sem espaco!");
+        display.display();
+        http.end();
+        return;
+    }
+    
+    display.clear();
+    display.drawString(0, 0, "Atualizando...");
+    display.drawString(0, 12, "Nao desligue!");
+    display.display();
+
+    WiFiClient& client = http.getStream();
+    size_t written = Update.writeStream(client);
+
+    if (written != contentLength) {
+        Serial.printf("Escrita falhou! Escrito %d de %d bytes\n", written, contentLength);
+        display.drawString(0, 48, "Erro na escrita!");
+        display.display();
+        http.end();
+        return;
+    }
+
+    if (!Update.end()) {
+        Serial.println("Erro ao finalizar a atualizacao: " + String(Update.getError()));
+        display.drawString(0, 48, "Erro ao finalizar!");
+        display.display();
+        http.end();
+        return;
+    }
+    
+    Serial.println("Atualizacao finalizada com sucesso!");
+    display.clear();
+    display.drawString(0, 20, "Atualizado!");
+    display.drawString(0, 40, "Reiniciando...");
+    display.display();
+    delay(2000);
+    ESP.restart();
+}
+
+void checkForUpdates() {
+    Serial.println("Verificando atualizacoes...");
+
+    HTTPClient http;
+    http.begin(urlVersao);
+    int httpCode = http.GET();
+
+    if (httpCode != HTTP_CODE_OK) {
+        Serial.printf("Falha ao verificar versao, codigo: %d\n", httpCode);
+        http.end();
+        return;
+    }
+
+    String payload = http.getString();
+    http.end();
+
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, payload);
+
+    float newVersion = doc["version"];
+    String firmwareUrl = doc["url"];
+
+    Serial.printf("Versao atual: %.1f, Versao disponivel: %.1f\n", FW_VERSION, newVersion);
+
+    if (newVersion > FW_VERSION) {
+        Serial.println("Nova versao encontrada. Iniciando atualizacao...");
+        performUpdate(firmwareUrl);
+    } else {
+        Serial.println("Firmware ja esta atualizado.");
+    }
 }
