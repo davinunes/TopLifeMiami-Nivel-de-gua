@@ -10,9 +10,9 @@
       "version": 1.0,
       "url": "http://h2o-miami.davinunes.eti.br/firmware/esp32_v1.0.bin"
     },
-    "ESP32-S3-PRO": {
-      "version": 2.1,
-      "url": "http://h2o-miami.davinunes.eti.br/firmware/esp32s3_v2.1.bin"
+    "ESP32-DEVKIT-V1": {
+      "version": 2.0,
+      "url": "http://h2o-miami.davinunes.eti.br/firmware/esp32-devkit-v1-fwv-2.0.bin"
     }
   }
 }
