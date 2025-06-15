@@ -928,27 +928,52 @@ void syncTime() {
 }
 
 void setupDeviceID() {
-  // Flag para limpeza. Mude para 'false' e regrave o código depois de rodar uma vez.
-  const bool LIMPAR_UUID_SALVO = false; 
-
   prefs.begin("device-info", false); 
+  deviceUuid = prefs.getString("uuid", "");
 
-  // Se a flag estiver ativa, remove o UUID salvo
-  if (LIMPAR_UUID_SALVO) {
-    Serial.println("!!! LIMPANDO UUID ANTIGO DA MEMÓRIA !!!");
-    prefs.remove("uuid");
-  }
+  String invalidMacSuffix = "00:00:00:00:00:00";
+  bool needsRegeneration = false;
 
-  deviceUuid = prefs.getString("uuid", ""); // Tenta ler o UUID novamente
-
-  // Se não encontrou (porque foi apagado ou nunca existiu), gera um novo e salva
   if (deviceUuid.length() == 0) {
-    Serial.println("Nenhum UUID encontrado. Gerando e salvando um novo...");
-    deviceUuid = String(BOARD_MODEL) + "-" + WiFi.macAddress();
-    prefs.putString("uuid", deviceUuid);
+    Serial.println("Nenhum UUID encontrado na memoria.");
+    needsRegeneration = true;
+  } else if (deviceUuid.endsWith(invalidMacSuffix)) {
+    Serial.println("UUID com MAC invalido detectado.");
+    needsRegeneration = true;
   }
-  
-  Serial.println("ID do Dispositivo: " + deviceUuid);
+
+  if (needsRegeneration) {
+    Serial.println("Iniciando processo para gerar um novo ID de dispositivo...");
+    String macAddress = "";
+    int retries = 0;
+    const int maxRetries = 20; // Tenta obter por 2 segundos
+
+    // Tenta obter um MAC address válido, pois o hardware pode não estar pronto imediatamente
+    while(retries < maxRetries) {
+        macAddress = WiFi.macAddress();
+        if (macAddress.length() > 0 && macAddress != invalidMacSuffix) {
+            Serial.print("MAC Address obtido com sucesso: ");
+            Serial.println(macAddress);
+            break; // Sai do loop se o MAC for válido
+        }
+        Serial.printf("Tentativa %d/%d: MAC invalido, tentando novamente...\n", retries + 1, maxRetries);
+        delay(100);
+        retries++;
+    }
+
+    // Se o MAC ainda for inválido após as tentativas, informa o erro.
+    if(macAddress.length() == 0 || macAddress == invalidMacSuffix) {
+        Serial.println("ERRO: Nao foi possivel obter um MAC address valido apos varias tentativas.");
+    }
+
+    // Cria o novo UUID (mesmo que o MAC seja inválido, para tentar novamente no próximo boot)
+    // e salva na memória persistente
+    deviceUuid = String(BOARD_MODEL) + "-" + macAddress;
+    prefs.putString("uuid", deviceUuid);
+    Serial.println("Novo UUID salvo na memoria.");
+  }
+
+  Serial.println("ID do Dispositivo final: " + deviceUuid);
   prefs.end();
 }
 
