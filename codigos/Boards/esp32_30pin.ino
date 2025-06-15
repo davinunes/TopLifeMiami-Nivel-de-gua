@@ -27,6 +27,7 @@
 
 #include <Update.h>
 #include <ArduinoJson.h>
+#include <time.h> // Necessario para a gestao do tempo
 
 #define FW_VERSION 1.0
 
@@ -34,71 +35,10 @@
 #define LED_PIN 2  // Pino do LED onboard (normalmente GPIO2 para ESP32)
 #define AP_MODE_DURATION 120000  // 2 minutos em modo AP
 
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = -3 * 3600; // Offset para o fuso horario do Brasil (GMT-3)
+const int   daylightOffset_sec = 0;    // Offset para horario de verao (geralmente 0)
 
-// Certificado Raiz (Root CA) para github.com e githubusercontent.com
-// Valido ate 2035
-const char* github_root_ca = \
-"-----BEGIN CERTIFICATE-----\n" \
-"MIIDxTCCAq2gAwIBAgIQAqxcJmoLQJuPC3nyrkYldzANBgkqhkiG9w0BAQUFADBs\n" \
-"MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n" \
-"d3cuZGlnaWNlcnQuY29tMSswKQYDVQQDEyJEaWdpQ2VydCBIaWdoIEFzc3VyYW5j\n" \
-"ZSBFViBSb290IENBMB4XDTA2MTExMDAwMDAwMFoXDTMxMTExMDAwMDAwMFowbDEL\n" \
-"MAkGA1UEBhMCVVMxFTATBgNVBAoTDERpZ2lDZXJ0IEluYzEZMBcGA1UECxMQd3d3\n" \
-"LmRpZ2ljZXJ0LmNvbTErMCkGA1UEAxMiRGlnaUNlcnQgSGlnaCBBc3N1cmFuY2Ug\n" \
-"RVYgUm9vdCBDQTCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAwNyi3UnKfpRF\n" \
-"yY+C21K9A1bT8U+2JpXO2Wd3JuWo+3jA9iMLrJGeCEHz9i9vs2i4zC1B0o29s0f2\n" \
-"p2I0g1f4G1s34p2p3OzhhG2vB5m48o/r7Z3JkO5y1qjAYlA6g1Xayp3sK424dBFM\n" \
-"9a1L5G+6wH3n5voANv5LhYhG1Gk+GWMCAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB\n" \
-"/zAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFMSnsaR7LHH62+FLkHX/xBVghYkQ\n" \
-"MA0GCSqGSIb3DQEBBQUAA4IBAQC0wV/AD4BteK2V4kX0s255jdBSi6dGZg9I7P3y\n" \
-"l2y3v6NVdcpV5sYIW2J2i7c1a27qH2y2W0bAlv0l6s7p9L/7nNf+k35OKGMt0eOu\n" \
-"ADBSqONPS3ZYhI52JpQ222PjJjfnwYv23aYRZv52L5a225eBf625lK2tLdykI52l\n" \
-"iA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLd/772lK2tLQxZp/225\n" \
-"lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLd/772\n" \
-"lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/2\n" \
-"25lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI\n" \
-"52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19\n" \
-"q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI5\n" \
-"2lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK\n" \
-"2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225\n" \
-"lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52\n" \
-"liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7\n" \
-"Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52l\n" \
-"HMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2t\n" \
-"LQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK\n" \
-"2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52li\n" \
-"A88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3\n" \
-"yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHM\n" \
-"d/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQ\n" \
-"xZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2t\n" \
-"LdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA8\n" \
-"8uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK\n" \
-"25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/\n" \
-"772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZ\n" \
-"p/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLd\n" \
-"ykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88u\n" \
-"K19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25\n" \
-"kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/77\n" \
-"2lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/\n" \
-"225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdyk\n" \
-"I52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK1\n" \
-"9q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI\n" \
-"52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772l\n" \
-"K2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/22\n" \
-"5lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI5\n" \
-"2liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q\n" \
-"7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52\n" \
-"lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2\n" \
-"tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225l\n" \
-"K2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52l\n" \
-"iA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z\n" \
-"3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lH\n" \
-"Md/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tL\n" \
-"QxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2\n" \
-"tLdykI52liA88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA\n" \
-"88uK19q7Z3yK25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3y\n" \
-"K25kI52lHMd/772lK2tLQxZp/225lK2tLdykI52liA88uK19q7Z3yK25kI52lHMd\n" \
-"-----END CERTIFICATE-----\n";
 
 // Configurações do sensor
 int idSensor = 3; 
@@ -311,6 +251,7 @@ void handleWiFiEvent(WiFiEvent_t event) {
       Serial.println(WiFi.localIP());
       StatusInternet = "Conectado: " + WiFi.localIP().toString();
       ledInterval = 250; // Piscar rápido quando conectado
+      syncTime();
       break;
       
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
@@ -972,30 +913,23 @@ String escapeHTML(String input) {
 void performUpdate(String url) {
     display.clear();
     display.setFont(ArialMT_Plain_10);
-    display.drawString(0, 0, "Atualizacao encontrada!");
-    display.drawString(0, 12, "Baixando firmware...");
+    display.drawString(0, 0, "Atualizacao de Teste!");
+    display.drawString(0, 12, "Baixando firmware (HTTP)...");
     display.display();
 
-    // Cria um cliente WiFi seguro
-    WiFiClientSecure client;
-    // Configura o cliente para usar o nosso certificado raiz para validar o servidor
-    client.setCACert(github_root_ca);
-
-    // Usa o cliente seguro para iniciar o HTTPClient
+    // Nao precisamos mais do WiFiClientSecure para um teste HTTP
     HTTPClient http;
-    http.begin(client, url);
+    http.begin(url); // A URL aqui eh a do seu servidor HTTP para o .bin
+    http.setTimeout(15000);
 
     int httpCode = http.GET();
 
-    // A logica de redirecionamento continua a mesma, mas agora funciona com HTTPS
+    // Mantemos a logica de redirecionamento, pois eh uma boa pratica,
+    // embora seja menos provavel que seu servidor a use.
     if (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
         String newUrl = http.header("Location");
-        Serial.println("Redirecionado para: " + newUrl);
-        display.drawString(0, 24, "Redirecionando...");
-        display.display();
-        
         http.end();
-        http.begin(client, newUrl); // Reutiliza o cliente seguro para a nova URL
+        http.begin(newUrl);
         httpCode = http.GET();
     }
 
@@ -1011,7 +945,6 @@ void performUpdate(String url) {
 
     int contentLength = http.getSize();
     if (contentLength <= 0) {
-        // ... (o resto da funcao eh igual)
         Serial.println("Tamanho do conteudo invalido.");
         display.drawString(0, 48, "Arquivo invalido!");
         display.display();
@@ -1031,23 +964,19 @@ void performUpdate(String url) {
     display.clear();
     display.drawString(0, 0, "Atualizando...");
     display.drawString(0, 12, "Nao desligue!");
+    display.drawString(0, 24, String(contentLength) + " bytes");
     display.display();
 
-    // IMPORTANTE: Passa o cliente SEGURO para o Update.writeStream
-    size_t written = Update.writeStream(client);
+    size_t written = Update.writeStream(http.getStream());
 
     if (written != contentLength) {
         Serial.printf("Escrita falhou! Escrito %d de %d bytes\n", written, contentLength);
-        display.drawString(0, 48, "Erro na escrita!");
-        display.display();
         http.end();
         return;
     }
 
     if (!Update.end()) {
         Serial.println("Erro ao finalizar a atualizacao: " + String(Update.getError()));
-        display.drawString(0, 48, "Erro ao finalizar!");
-        display.display();
         http.end();
         return;
     }
@@ -1057,6 +986,8 @@ void performUpdate(String url) {
     display.drawString(0, 20, "Atualizado!");
     display.drawString(0, 40, "Reiniciando...");
     display.display();
+    
+    http.end();
     delay(2000);
     ESP.restart();
 }
@@ -1087,8 +1018,28 @@ void checkForUpdates() {
 
     if (newVersion > FW_VERSION) {
         Serial.println("Nova versao encontrada. Iniciando atualizacao...");
+        // Adicione esta linha para depurar a memoria
+        Serial.printf("Memoria Heap livre antes do FOTA: %d bytes\n", ESP.getFreeHeap());
         performUpdate(firmwareUrl);
     } else {
         Serial.println("Firmware ja esta atualizado.");
     }
+}
+
+void syncTime() {
+  Serial.println("Sincronizando horario...");
+  // Inicia a configuracao do tempo com o servidor NTP
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  // Espera ate que o tempo seja obtido
+  time_t now = time(nullptr);
+  while (now < 8 * 3600 * 2) { // Loop ate que o tempo seja valido (maior que 1/1/1970)
+    delay(500);
+    now = time(nullptr);
+  }
+
+  struct tm timeinfo;
+  gmtime_r(&now, &timeinfo);
+  Serial.print("Horario sincronizado: ");
+  Serial.println(asctime(&timeinfo));
 }
