@@ -28,7 +28,7 @@
 #include <time.h> // Necessario para a gestao do tempo
 
 #define BOARD_MODEL "ESP32-DEVKIT-V1"
-#define FW_VERSION 1.0
+#define FW_VERSION 2.0
 
 // ==================== CONFIGURAÇÕES ====================
 #define LED_PIN 2  // Pino do LED onboard (normalmente GPIO2 para ESP32)
@@ -1077,7 +1077,7 @@ void syncTime() {
 
 void setupDeviceID() {
   // Flag para limpeza. Mude para 'false' e regrave o código depois de rodar uma vez.
-  const bool LIMPAR_UUID_SALVO = true; 
+  const bool LIMPAR_UUID_SALVO = false; 
 
   prefs.begin("device-info", false); 
 
