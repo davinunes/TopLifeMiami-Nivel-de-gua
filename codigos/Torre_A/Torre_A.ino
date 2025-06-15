@@ -32,7 +32,7 @@
 // Configurações do sensor
 int idSensor = 3; 
 int distanciaSonda = 0; 
-int alturaAgua = 240; 
+int alturaAgua = 200; 
 String nomeDaSonda = "Torre A Reservatório 01";
 
 // URLs para configuração remota
@@ -129,7 +129,7 @@ void setup() {
 // ==================== LOOP PRINCIPAL ====================
 void loop() {
   // Atualizações regulares
-  if (millis() - lastDisplayUpdate >= displayInterval) {
+  if (!inAPMode && millis() - lastDisplayUpdate >= displayInterval) {
     sonar();
     tela();
     IoT();
@@ -166,6 +166,7 @@ void switchToAPMode() {
   digitalWrite(LED_PIN, HIGH);
   
   Serial.println("Modo AP ativado");
+  display.drawString(0, 0, "Modo AP ativado");
 }
 
 void switchToStationMode() {
@@ -179,23 +180,25 @@ void switchToStationMode() {
   ledInterval = 1000; // 1 segundo
   
   Serial.println("Tentando conectar como estação...");
+  display.drawString(0, 0, "Conectando...");
 }
 
 void startAccessPoint() {
-  WiFi.softAPdisconnect(true);
-  delay(100);
+  Serial.println("Configurando Access Point...");
 
-  // Configuração do IP
+  // Define uma configuracao de IP estatica para o AP
   IPAddress apIP(192, 168, 40, 1);
-  IPAddress gateway(192, 168, 40, 1);
+  IPAddress gateway(192, 168, 40, 1); // O gateway é o próprio ESP
   IPAddress subnet(255, 255, 255, 0);
+
+  // Aplica a configuracao de IP ao AP
   WiFi.softAPConfig(apIP, gateway, subnet);
 
-  // Cria SSID baseado no ID do sensor
+  // Cria o nome da rede (SSID)
   Config cfg = loadConfig();
   String apSsid;
   int id = cfg.sensorId.toInt();
-  
+
   if (id >= 1 && id <= 6) {
     const char* torres[6] = {"E", "F", "A", "B", "C", "D"};
     apSsid = "Sensor_Torre" + String(torres[id - 1]);
@@ -203,11 +206,25 @@ void startAccessPoint() {
     apSsid = "Sensor_ID" + cfg.sensorId;
   }
 
-  WiFi.softAP(apSsid.c_str(), "12345678", 6, 0, 4);
-  dnsServer.start(53, "*", apIP);
-  
-  Serial.print("AP iniciado: ");
-  Serial.println(apSsid);
+  // Inicia o AP com o SSID e senha
+  // O 'true' no final torna a rede visivel (nao oculta)
+  if (WiFi.softAP(apSsid.c_str(), "12345678", 6, false, 4)) {
+    Serial.print("AP iniciado com sucesso: ");
+    display.drawString(0, 0, "AP iniciado");
+    Serial.println(apSsid);
+    Serial.print("IP do AP: ");
+    Serial.println(WiFi.softAPIP());
+
+    // Inicia o servidor DNS APENAS DEPOIS que o AP esta no ar.
+    // O '*' significa que ele respondera a QUALQUER requisicao de dominio.
+    if (dnsServer.start(53, "*", apIP)) {
+        Serial.println("Servidor DNS iniciado.");
+    } else {
+        Serial.println("Falha ao iniciar servidor DNS!");
+    }
+  } else {
+    Serial.println("Falha ao iniciar AP!");
+  }
 }
 
 void handleWiFiEvent(WiFiEvent_t event) {
@@ -354,9 +371,37 @@ void setupWebServer() {
   server.on("/", handleRoot);
   server.on("/save", handleSave);
   server.on("/esquema", handleEsquema);
-  server.on("/scan-wifi", handleWiFiScan); // Novo endpoint
-  server.onNotFound(handleRoot);
+  server.on("/scan-wifi", handleWiFiScan);
+  // === INICIO DAS ADICOES PARA PORTAL CATIVO ===
+  // Endpoints comuns que os sistemas operacionais buscam
+  server.on("/generate_204", handleRoot); // Android
+  server.on("/gen_204", handleRoot);      // Android
+  server.on("/hotspot-detect.html", handleRoot); // Apple iOS
+  server.on("/library/test/success.html", handleRoot); // Apple
+  server.on("/ncsi.txt", handleRoot); // Microsoft
+  server.on("/connecttest.txt", handleRoot); // Microsoft
+  // === FIM DAS ADICOES ===
+  server.onNotFound(handleNotFound);
   server.begin();
+}
+
+void handleNotFound() {
+  String uri = server.uri();
+  String host = server.hostHeader();
+  String method = (server.method() == HTTP_GET) ? "GET" : "POST";
+
+  Serial.println("=============================================");
+  Serial.println("Requisicao recebida em endereco nao mapeado!");
+  Serial.print("Metodo: ");
+  Serial.println(method);
+  Serial.print("URI: ");
+  Serial.println(uri);
+  Serial.print("Host: ");
+  Serial.println(host);
+  Serial.println("=============================================");
+
+  // Agora, redirecionamos para a pagina principal (comportamento de portal cativo)
+  handleRoot();
 }
 
 void handleRoot() {
