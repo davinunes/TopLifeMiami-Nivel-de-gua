@@ -431,7 +431,7 @@ void saveConfig(String ssid, String pass, String sensorId) {
   prefs.putString("ssid", ssid);
   prefs.putString("pass", pass);
   prefs.putString("sensorId", sensorId);
-  prefs.putString("nomeSonda", nomeSonda);
+  prefs.putString("nomeSonda", nomeDaSonda);
   prefs.end();
 }
 
