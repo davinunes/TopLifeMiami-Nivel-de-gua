@@ -126,6 +126,9 @@ void setup() {
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW); // Inicia com LED apagado
+
+  WiFi.mode(WIFI_STA);
+
   setupDeviceID();
 
   // Inicializa display
@@ -1073,16 +1076,26 @@ void syncTime() {
 }
 
 void setupDeviceID() {
-  prefs.begin("device-info", false); // << CORRIGIDO: 'preferences' trocado por 'prefs'
-  deviceUuid = prefs.getString("uuid", ""); // Tenta ler o UUID
+  // Flag para limpeza. Mude para 'false' e regrave o código depois de rodar uma vez.
+  const bool LIMPAR_UUID_SALVO = true; 
 
-  // Se não encontrou, gera um novo a partir do MAC e salva
-  if (deviceUuid.length() == 0) {
-    Serial.println("Nenhum UUID encontrado. Gerando e salvando um novo...");
-    deviceUuid = "ESP32-" + WiFi.macAddress();
-    prefs.putString("uuid", deviceUuid);
+  prefs.begin("device-info", false); 
+
+  // Se a flag estiver ativa, remove o UUID salvo
+  if (LIMPAR_UUID_SALVO) {
+    Serial.println("!!! LIMPANDO UUID ANTIGO DA MEMÓRIA !!!");
+    prefs.remove("uuid");
   }
 
+  deviceUuid = prefs.getString("uuid", ""); // Tenta ler o UUID novamente
+
+  // Se não encontrou (porque foi apagado ou nunca existiu), gera um novo e salva
+  if (deviceUuid.length() == 0) {
+    Serial.println("Nenhum UUID encontrado. Gerando e salvando um novo...");
+    deviceUuid = String(BOARD_MODEL) + "-" + WiFi.macAddress();
+    prefs.putString("uuid", deviceUuid);
+  }
+  
   Serial.println("ID do Dispositivo: " + deviceUuid);
   prefs.end();
 }
