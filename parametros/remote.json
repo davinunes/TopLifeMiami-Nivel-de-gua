@@ -1,7 +1,7 @@
 {
   "general_config": {
     "ping_base_url": "https://personal-od1qe4uh.outsystemscloud.com/SensorDataBase/rest/ping/pong",
-    "url_leituras_sensor":"",
+    "url_leituras_sensor":"http://h2o-miami.davinunes.eti.br",
     "update_interval_ms": 60000,
     "alert_level_cm": 50
   },
