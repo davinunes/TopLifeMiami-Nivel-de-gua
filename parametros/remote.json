@@ -1,0 +1,18 @@
+{
+  "general_config": {
+    "ping_base_url": "https://personal-od1qe4uh.outsystemscloud.com/SensorDataBase/rest/ping/pong",
+    "url_leituras_sensor":"",
+    "update_interval_ms": 60000,
+    "alert_level_cm": 50
+  },
+  "fota_config": {
+    "ESP32-30PIN-V1": {
+      "version": 1.0,
+      "url": "http://h2o-miami.davinunes.eti.br/firmware/esp32_v1.0.bin"
+    },
+    "ESP32-S3-PRO": {
+      "version": 2.1,
+      "url": "http://h2o-miami.davinunes.eti.br/firmware/esp32s3_v2.1.bin"
+    }
+  }
+}
