@@ -429,12 +429,12 @@ Config loadConfig() {
   return cfg;
 }
 
-void saveConfig(String ssid, String pass, String sensorId) {
+void saveConfig(String ssid, String pass, String sensorId, String nomeSonda) {
   prefs.begin("wifi-config", false);
   prefs.putString("ssid", ssid);
   prefs.putString("pass", pass);
   prefs.putString("sensorId", sensorId);
-  prefs.putString("nomeSonda", nomeDaSonda);
+  prefs.putString("nomeSonda", nomeSonda);
   prefs.end();
 }
 
@@ -921,7 +921,7 @@ void handleSave() {
     return;
   }
 
-  saveConfig(ssid, pass, sensorId);
+  saveConfig(ssid, pass, sensorId, nomeSonda);
   server.send(200, "text/html; charset=UTF-8",
               "<html><meta charset='UTF-8'><body>"
               "<h1>Configurações salvas!</h1>"
