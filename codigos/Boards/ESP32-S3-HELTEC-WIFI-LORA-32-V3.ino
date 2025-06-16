@@ -1,12 +1,12 @@
 /*
-   CÓDIGO ADAPTADO PARA LILYGO T-Call com SIM800L
-   Alterações principais:
-   - Display OLED no segundo I2C (SDA=15, SCL=2)
-   - Sensor ultrassônico nos pinos 12 (trigger) e 14 (echo)
-   - Pinos 4,5,23,26,27 reservados para SIM800L
-
-   - PINOUT da placa utilizada: https://github.com/Xinyuan-LilyGO/LilyGo-T-Call-SIM800/blob/master/image/SIM800L_AXP192.jpg
-   - Importante: Na IDE selecionar ESP32 Wrover Module e MUITO IMPORTANTE: precisa de uma fonte de 2A pra programar ela.
+  SKETCH ADAPTADO PARA A PLACA HELTEC WIFI LORA 32 (V3)
+  - Modelo da Placa: ESP32-S3-HELTEC-WIFI-LORA-32-V3
+  - Versão: 1.0
+  - Display OLED integrado: SDA(17), SCL(18), RST(21), Vext Power(2)
+  - Sensor Sonar: TRIGGER(33), ECHO(34)
+  - Pinout: https://resource.heltec.cn/download/WiFi_LoRa_32_V3/HTIT-WB32LA_V3(Rev1.1).pdf
+  - Pinout: https://www.espboards.dev/img/qS1QpyeC_N-1000.png
+  - Dataseet: https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf
 */
 
 #include <WiFi.h>
@@ -22,25 +22,27 @@
 #include <ArduinoJson.h>
 #include <time.h>
 
-#define BOARD_MODEL "LILYGO-TCall"
-#define FW_VERSION 2.0
+// ==================== NOVAS CONFIGURAÇÕES DA PLACA ====================
+#define BOARD_MODEL "ESP32-S3-HELTEC-WIFI-LORA-32-V3"
+#define FW_VERSION 1.0
+#define OLED_SDA 17
+#define OLED_SCL 18
+#define OLED_RST 21
+#define OLED_VEXT_POWER 2 // PINO que controla a alimentação do OLED e outros periféricos
 
 // ==================== CONFIGURAÇÕES ====================
-#define LED_PIN 13  // Pino do LED onboard (GPIO2)
-#define AP_MODE_DURATION 120000  // 2 minutos em modo AP
+#define LED_PIN 35 // LED onboard na Heltec V3 é o pino 35
+#define AP_MODE_DURATION 120000
 
 const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = -3 * 3600; // GMT-3
-const int   daylightOffset_sec = 0;
+const long gmtOffset_sec = -3 * 3600;
+const int daylightOffset_sec = 0;
 
-// Configurações do sensor
 int idSensor = 3;
 int distanciaSonda = 0;
 int alturaAgua = 200;
 String nomeDaSonda = "Torre A Reservatório 01";
 String deviceUuid = "";
-
-// URLs para configuração remota
 String IntervaloDePush = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/updateTime";
 String nivelAlertaTelegram = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/nivelAlerta";
 String novoUrlSite = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/novoUrlSite";
@@ -49,14 +51,14 @@ String urlVersao = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Niv
 String pingBaseUrl = "";
 
 // ==================== VARIÁVEIS GLOBAIS ====================
-// Display OLED (usando segundo I2C: SDA=15, SCL=2)
-SSD1306Wire display(0x3c, 15, 2); // Endereço I2C 0x3c, SDA=15, SCL=2
+// Display - Pinos atualizados para o OLED integrado da Heltec V3
+SSD1306Wire display(0x3c, OLED_SDA, OLED_SCL);
 
-// Sonar (pinos alterados para 12 e 14)
-#define TRIGGER_PIN  12
-#define ECHO_PIN     14
-Ultrasonic sonar1(TRIGGER_PIN, ECHO_PIN, 40000UL);
-int distance = 0;  // Distância medida pelo sensor em CM
+// Sonar - Pinos atualizados para melhor conexão na Heltec V3
+#define TRIGGER_PIN  19
+#define ECHO_PIN1    20
+Ultrasonic sonar1(TRIGGER_PIN, ECHO_PIN1, 40000UL);
+int distance = 0;
 
 // Rede
 WebServer server(80);
@@ -77,7 +79,7 @@ unsigned long lastLedToggle = 0;
 bool ledState = false;
 unsigned long ledInterval = 1000;
 
-// ==================== ESTRUTURAS ====================
+// ==================== ESTRUTURAS E PROTÓTIPOS ====================
 struct Config {
   String ssid;
   String pass;
@@ -85,18 +87,51 @@ struct Config {
   String nomeSonda;
 };
 
-// [Restante das declarações de funções permanece igual...]
+void setupWiFi();
+void switchToAPMode();
+void switchToStationMode();
+void updateLed();
+void handleWiFiEvent(WiFiEvent_t event);
+void sonar();
+void tela();
+void IoT();
+void getParametrosRemotos();
+Config loadConfig();
+void saveConfig(String ssid, String pass, String sensorId, String nomeSonda);
+void startAccessPoint();
+void setupWebServer();
+void handleRoot();
+void handleSave();
+String escapeHTML(String input);
+void performUpdate(String url);
+void checkForUpdates();
+void syncTime();
+void setupDeviceID();
+void getRemoteConfig();
+void sendPing();
+void publishSensorReading(int sensorValue);
+void handleEsquema();
+void handleWiFiScan();
+void handleNotFound();
 
+// ==================== SETUP ====================
 void setup() {
   Serial.begin(115200);
+  
+  // --- INICIALIZAÇÃO ESPECÍFICA DA HELTEC V3 ---
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
+  
+  // Liga a alimentação (Vext) para o display OLED
+  pinMode(OLED_VEXT_POWER, OUTPUT);
+  digitalWrite(OLED_VEXT_POWER, LOW); // LOW ativa a alimentação
+  delay(100);
 
-  WiFi.mode(WIFI_STA);
+  // Inicializa e reseta o display
+  pinMode(OLED_RST, OUTPUT);
+  digitalWrite(OLED_RST, HIGH); // Tira o display do modo reset
+  delay(100);
 
-  setupDeviceID();
-
-  // Inicializa display com flip vertical
   display.init();
   display.flipScreenVertically();
   display.clear();
@@ -104,51 +139,43 @@ void setup() {
   display.setFont(ArialMT_Plain_16);
   display.drawString(0, 0, "Iniciando...");
   display.display();
+  // --- FIM DA INICIALIZAÇÃO DA HELTEC ---
 
-  // Carrega configurações
+  WiFi.mode(WIFI_STA);
+  setupDeviceID();
+
   Config cfg = loadConfig();
   idSensor = cfg.sensorId.toInt();
   nomeDaSonda = cfg.nomeSonda;
-
-  // Configura eventos WiFi
+  
   WiFi.onEvent(handleWiFiEvent);
 
-  // Inicia em modo AP
   bootTime = millis();
   switchToAPMode();
-
-  // Configura servidor web
   setupWebServer();
   Serial.println("Setup completo");
 }
 
 // ==================== LOOP PRINCIPAL ====================
 void loop() {
-  // Atualizações regulares
   if (!inAPMode && millis() - lastDisplayUpdate >= displayInterval) {
     sonar();
-
     IoT();
     lastDisplayUpdate = millis();
   }
 
-  // Verifica se deve sair do modo AP após 2 minutos
   if (inAPMode && (millis() - bootTime > AP_MODE_DURATION)) {
     switchToStationMode();
   }
 
-  // Atualiza estado do LED
   updateLed();
-
-  // Trata requisições do servidor web
   server.handleClient();
-
-  // Se estiver em modo AP, trata também DNS
   if (inAPMode) {
     dnsServer.processNextRequest();
   }
   tela();
 }
+
 
 // ==================== FUNÇÕES DE REDE ====================
 void switchToAPMode() {
@@ -617,236 +644,96 @@ void handleRoot() {
 
 void handleEsquema(){
   String html =R"rawliteral(
-                                  <!DOCTYPE html>
-                                <html lang="pt-BR">
-                                <head>
-                                    <meta charset="UTF-8">
-                                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                                    <title>ESP32 e Componentes</title>
-                                    <style>
-                                        body {
-                                            display: flex;
-                                            justify-content: center;
-                                            align-items: center;
-                                            min-height: 100vh;
-                                            background-color: #f0f0f0;
-                                            margin: 0;
-                                            font-family: Arial, sans-serif;
-                                        }
-
-                                        .board-container {
-                                            display: flex;
-                                            gap: 50px;
-                                        }
-
-                                        .components-container {
-                                            display: flex;
-                                            flex-direction: column;
-                                            gap: 30px; /* Espaço entre sensor e display */
-                                        }
-
-                                        .esp32-board, .sensor-board, .display-board {
-                                            background-color: #333;
-                                            border-radius: 8px;
-                                            position: relative;
-                                            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-                                            display: flex;
-                                            justify-content: space-between;
-                                            padding: 0 10px;
-                                            box-sizing: border-box;
-                                        }
-
-                                        .esp32-board {
-                                            width: 120px;
-                                            height: 430px;
-                                        }
-
-                                        .sensor-board, .display-board {
-                                            width: 150px;
-                                            height: 40px;
-                                            align-items: flex-end;
-                                            padding: 5px;
-                                        }
-
-                                        .esp32-label, .sensor-label, .display-label {
-                                            position: absolute;
-                                            top: 50%;
-                                            left: 50%;
-                                            transform: translate(-50%, -50%);
-                                            color: #eee;
-                                            font-size: 1.2em;
-                                            font-weight: bold;
-                                            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
-                                            pointer-events: none;
-                                            white-space: nowrap;
-                                        }
-
-                                        .micro-usb {
-                                            width: 40px;
-                                            height: 15px;
-                                            background-color: #888;
-                                            border-radius: 3px;
-                                            position: absolute;
-                                            top: -10px;
-                                            left: 50%;
-                                            transform: translateX(-50%);
-                                            z-index: 10;
-                                            border: 1px solid #666;
-                                        }
-
-                                        .pin-column {
-                                            display: flex;
-                                            flex-direction: column;
-                                            justify-content: space-around;
-                                            height: 100%;
-                                            position: absolute;
-                                        }
-
-                                        .pin-column.left {
-                                            left: -10px;
-                                        }
-
-                                        .pin-column.right {
-                                            right: -10px;
-                                        }
-
-                                        .pin-row-bottom {
-                                            display: flex;
-                                            justify-content: space-around;
-                                            width: 100%;
-                                            position: absolute;
-                                            bottom: -10px;
-                                            left: 0;
-                                            padding: 0 5px;
-                                            box-sizing: border-box;
-                                        }
-
-                                        .pin {
-                                            width: 20px;
-                                            height: 20px;
-                                            background-color: #bbb;
-                                            border-radius: 50%;
-                                            border: 1px solid #888;
-                                            box-sizing: border-box;
-                                            display: flex;
-                                            justify-content: center;
-                                            align-items: center;
-                                            font-size: 9px;
-                                            color: #444;
-                                            font-weight: bold;
-                                            margin: 3px 0;
-                                            flex-shrink: 0;
-                                        }
-
-                                        .pin-row-bottom .pin {
-                                            margin: 0 2px;
-                                        }
-
-                                        .pin.sda {
-                                            background-color: teal;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
-                                        .pin.scl {
-                                            background-color: #4CAF50;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
-
-                                        .pin.vcc5 {
-                                            background-color: red;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
-                                        .pin.vcc3 {
-                                            background-color: orange;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
-                                        .pin.gnd {
-                                            background-color: black;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
-                                        .pin.trig {
-                                            background-color: #007bff;
-                                            border-color: #0056b3;
-                                            color: white;
-                                        }
-                                        .pin.echo {
-                                            background-color: #ffc107;
-                                            border-color: #d39e00;
-                                            color: black;
-                                        }
-                                    </style>
-                                </head>
-                                <body>
-                                    <div class="board-container">
-                                        <div class="esp32-board">
-                                            <div class="esp32-label">ESP32</div>
-                                            <div class="micro-usb"></div>
-
-                                            <div class="pin-column left">
-                                                <div class="pin vcc3" title="3V3">3V3</div>
-                                                <div class="pin gnd" title="GND">GND</div>
-                                                <div class="pin" title="D15">D15</div>
-                                                <div class="pin" title="D2">D2</div>
-                                                <div class="pin" title="D4">D4</div>
-                                                <div class="pin" title="RX2">RX2</div>
-                                                <div class="pin" title="TX2">TX2</div>
-                                                <div class="pin" title="D5">D5</div>
-                                                <div class="pin" title="D18">D18</div>
-                                                <div class="pin" title="D19">D19</div>
-                                                <div class="pin sda" title="D21 (SDA)">D21</div>
-                                                <div class="pin" title="RX0">RX0</div>
-                                                <div class="pin" title="TX0">TX0</div>
-                                                <div class="pin scl" title="D22 (SCL)">D22</div>
-                                                <div class="pin" title="D23">D23</div>
-                                            </div>
-
-                                            <div class="pin-column right">
-                                                <div class="pin vcc5" title="VIN">VIN</div>
-                                                <div class="pin gnd" title="GND">GND</div>
-                                                <div class="pin trig" title="D13">D13</div>
-                                                <div class="pin echo" title="D12">D12</div>
-                                                <div class="pin" title="D14">D14</div>
-                                                <div class="pin" title="D27">D27</div>
-                                                <div class="pin" title="D26">D26</div>
-                                                <div class="pin" title="D25">D25</div>
-                                                <div class="pin" title="D33">D33</div>
-                                                <div class="pin" title="D32">D32</div>
-                                                <div class="pin" title="D35">D35</div>
-                                                <div class="pin" title="D33">D33</div>
-                                                <div class="pin" title="VN">VN</div>
-                                                <div class="pin" title="VP">VP</div>
-                                                <div class="pin" title="EN">EN</div>
-                                            </div>
-                                        </div>
-
-                                        <div class="components-container">
-                                            <div class="sensor-board">
-                                                <div class="sensor-label">Sensor</div>
-                                                <div class="pin-row-bottom">
-                                                    <div class="pin vcc5" title="VCC">VCC</div>
-                                                    <div class="pin trig" title="TRIG">TRI</div>
-                                                    <div class="pin echo" title="ECHO">ECH</div>
-                                                    <div class="pin gnd" title="GND">GND</div>
-                                                </div>
-                                            </div>
-
-                                            <div class="display-board">
-                                                <div class="display-label">Display</div>
-                                                <div class="pin-row-bottom">
-                                                    <div class="pin gnd" title="GND">GND</div>
-                                                    <div class="pin vcc3" title="VCC">VCC</div>
-                                                    <div class="pin scl" title="SCL">SCL</div>
-                                                    <div class="pin sda" title="SDA">SDA</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </body>
-                                </html>
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>ESP32-S3 Heltec V3 - Esquema de Ligação</title>
+        <style>
+            body { display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #f0f0f0; margin: 0; font-family: Arial, sans-serif; }
+            .board-container { display: flex; gap: 50px; align-items: center; }
+            .components-container { display: flex; flex-direction: column; gap: 30px; }
+            .esp32-board, .sensor-board { background-color: #000; border: 2px solid #555; border-radius: 8px; position: relative; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); display: flex; justify-content: space-between; padding: 0 10px; box-sizing: border-box; }
+            .esp32-board { width: 120px; height: 500px; }
+            .sensor-board { width: 160px; height: 40px; align-items: flex-end; padding: 5px; }
+            .board-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #eee; font-size: 1.2em; font-weight: bold; text-shadow: 1px 1px 2px rgba(0,0,0,0.5); pointer-events: none; white-space: nowrap; }
+            .sensor-label { color: #eee; font-weight: bold; margin: 0 auto 8px; }
+            .usb-c-port { width: 30px; height: 12px; background-color: #888; border-radius: 3px; position: absolute; top: -7px; left: 50%; transform: translateX(-50%); z-index: 10; border: 1px solid #666; }
+            .pin-column { display: flex; flex-direction: column; justify-content: space-around; height: 100%; position: absolute; }
+            .pin-column.left { left: -10px; }
+            .pin-column.right { right: -10px; }
+            .pin-row-bottom { display: flex; justify-content: space-around; width: 100%; position: absolute; bottom: -10px; left: 0; padding: 0 5px; box-sizing: border-box; }
+            .pin { width: 22px; height: 22px; background-color: #bbb; border-radius: 50%; border: 1px solid #888; box-sizing: border-box; display: flex; justify-content: center; align-items: center; font-size: 8px; color: #333; font-weight: bold; margin: 2px 0; flex-shrink: 0; }
+            .pin-row-bottom .pin { margin: 0 2px; }
+            .pin.vcc5, .pin.vcc3, .pin.gnd, .pin.trig, .pin.echo { color: white; border-color: #fff; }
+            .pin.vcc5 { background-color: red; }
+            .pin.vcc3 { background-color: orange; }
+            .pin.gnd { background-color: black; }
+            .pin.trig { background-color: #007bff; }
+            .pin.echo { background-color: #ffc107; color: black; }
+        </style>
+    </head>
+    <body>
+        <div class="board-container">
+            <div class="esp32-board">
+                <div class="board-label">Heltec WiFi LoRa 32 (V3)</div>
+                <div class="usb-c-port"></div>
+                <div class="pin-column left" style="flex-direction: column-reverse;">
+                    <div class="pin " title="GND">GND</div> 
+					<div class="pin " title="3V3">3V3</div> 
+					<div class="pin " title="3V3">3V3</div> 
+					<div class="pin" title="IO37">37</div> 
+					<div class="pin" title="IO46">46</div> 
+					<div class="pin" title="IO45">45</div> 
+					<div class="pin" title="IO42">42</div> 
+					<div class="pin" title="IO41">41</div> 
+					<div class="pin" title="IO40">40</div> 
+					<div class="pin" title="IO39">39</div> 
+					<div class="pin" title="IO38">38</div> 
+					<div class="pin" title="IO1">1</div> 
+					<div class="pin" title="IO2">2</div> 
+					<div class="pin" title="IO3">3</div> 
+					<div class="pin" title="IO4">4</div> 
+					<div class="pin" title="IO5">5</div> 
+					<div class="pin" title="IO6">6</div> 
+					<div class="pin" title="IO7">7</div>
+                </div>
+                <div class="pin-column right" style="flex-direction: column-reverse;">
+                    <div class="pin gnd" title="GND">GND</div> 
+					<div class="pin vcc5" title="5V">5V</div> 
+					<div class="pin" title="VE">VE</div> 
+					<div class="pin" title="VE">VE</div> 
+					<div class="pin" title="RX">RX</div> 
+					<div class="pin" title="TX">TX</div> 
+					<div class="pin" title="RST">RST</div> 
+					<div class="pin" title="IO0">0</div> 
+					<div class="pin" title="IO36">36</div> 
+					<div class="pin" title="IO35">35</div> 
+					<div class="pin" title="IO34" id="echo_pin">34</div> 
+					<div class="pin" id="trig_pin">33</div> 
+					<div class="pin" title="IO47">47</div> 
+					<div class="pin" title="IO48">48</div> 
+					<div class="pin" title="IO26">26</div> 
+					<div class="pin" title="IO21">21</div> 
+					<div class="pin trig" title="IO20">20</div> 
+					<div class="pin echo" title="IO19">19</div>
+                </div>
+            </div>
+            <div class="components-container">
+                <div class="sensor-board">
+                    <div class="sensor-label">Sensor HC-SR04</div>
+                    <div class="pin-row-bottom">
+                        <div class="pin vcc5" title="VCC -> 5V">VCC</div>
+                        <div class="pin trig" title="TRIG -> D33">TRI</div>
+                        <div class="pin echo" title="ECHO -> D34">ECH</div>
+                        <div class="pin gnd" title="GND -> GND">GND</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
   )rawliteral";
 
   server.sendHeader("Content-Type", "text/html; charset=UTF-8");
@@ -1041,27 +928,52 @@ void syncTime() {
 }
 
 void setupDeviceID() {
-  // Flag para limpeza. Mude para 'false' e regrave o código depois de rodar uma vez.
-  const bool LIMPAR_UUID_SALVO = false; 
-
   prefs.begin("device-info", false); 
+  deviceUuid = prefs.getString("uuid", "");
 
-  // Se a flag estiver ativa, remove o UUID salvo
-  if (LIMPAR_UUID_SALVO) {
-    Serial.println("!!! LIMPANDO UUID ANTIGO DA MEMÓRIA !!!");
-    prefs.remove("uuid");
-  }
+  String invalidMacSuffix = "00:00:00:00:00:00";
+  bool needsRegeneration = false;
 
-  deviceUuid = prefs.getString("uuid", ""); // Tenta ler o UUID novamente
-
-  // Se não encontrou (porque foi apagado ou nunca existiu), gera um novo e salva
   if (deviceUuid.length() == 0) {
-    Serial.println("Nenhum UUID encontrado. Gerando e salvando um novo...");
-    deviceUuid = String(BOARD_MODEL) + "-" + WiFi.macAddress();
-    prefs.putString("uuid", deviceUuid);
+    Serial.println("Nenhum UUID encontrado na memoria.");
+    needsRegeneration = true;
+  } else if (deviceUuid.endsWith(invalidMacSuffix)) {
+    Serial.println("UUID com MAC invalido detectado.");
+    needsRegeneration = true;
   }
-  
-  Serial.println("ID do Dispositivo: " + deviceUuid);
+
+  if (needsRegeneration) {
+    Serial.println("Iniciando processo para gerar um novo ID de dispositivo...");
+    String macAddress = "";
+    int retries = 0;
+    const int maxRetries = 20; // Tenta obter por 2 segundos
+
+    // Tenta obter um MAC address válido, pois o hardware pode não estar pronto imediatamente
+    while(retries < maxRetries) {
+        macAddress = WiFi.macAddress();
+        if (macAddress.length() > 0 && macAddress != invalidMacSuffix) {
+            Serial.print("MAC Address obtido com sucesso: ");
+            Serial.println(macAddress);
+            break; // Sai do loop se o MAC for válido
+        }
+        Serial.printf("Tentativa %d/%d: MAC invalido, tentando novamente...\n", retries + 1, maxRetries);
+        delay(100);
+        retries++;
+    }
+
+    // Se o MAC ainda for inválido após as tentativas, informa o erro.
+    if(macAddress.length() == 0 || macAddress == invalidMacSuffix) {
+        Serial.println("ERRO: Nao foi possivel obter um MAC address valido apos varias tentativas.");
+    }
+
+    // Cria o novo UUID (mesmo que o MAC seja inválido, para tentar novamente no próximo boot)
+    // e salva na memória persistente
+    deviceUuid = String(BOARD_MODEL) + "-" + macAddress;
+    prefs.putString("uuid", deviceUuid);
+    Serial.println("Novo UUID salvo na memoria.");
+  }
+
+  Serial.println("ID do Dispositivo final: " + deviceUuid);
   prefs.end();
 }
 
