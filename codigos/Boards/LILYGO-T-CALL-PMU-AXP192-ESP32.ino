@@ -97,13 +97,19 @@ void setup() {
   setupDeviceID();
 
   // Inicializa display com flip vertical
-  display.init();
-  display.flipScreenVertically();
-  display.clear();
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.setFont(ArialMT_Plain_16);
-  display.drawString(0, 0, "Iniciando...");
-  display.display();
+  if(displayConectado) {
+    display.init();
+    display.flipScreenVertically();
+    display.clear();
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
+    display.setFont(ArialMT_Plain_16);
+    display.drawString(0, 0, "Iniciando...");
+    display.display();
+    Serial.println("Display OLED inicializado");
+  } else {
+    Serial.println("Display OLED não encontrado - continuando sem display");
+  }
+}
 
   // Carrega configurações
   Config cfg = loadConfig();
@@ -148,6 +154,12 @@ void loop() {
     dnsServer.processNextRequest();
   }
   tela();
+}
+
+bool verificarDisplay() {
+  Wire.begin(15, 2); // SDA, SCL
+  Wire.beginTransmission(0x3C);
+  return (Wire.endTransmission() == 0);
 }
 
 // ==================== FUNÇÕES DE REDE ====================
