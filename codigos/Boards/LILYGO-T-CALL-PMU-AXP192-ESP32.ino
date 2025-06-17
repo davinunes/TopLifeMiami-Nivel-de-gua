@@ -619,234 +619,249 @@ void handleEsquema(){
   String html =R"rawliteral(
                                   <!DOCTYPE html>
                                 <html lang="pt-BR">
-                                <head>
-                                    <meta charset="UTF-8">
-                                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                                    <title>ESP32 e Componentes</title>
-                                    <style>
-                                        body {
-                                            display: flex;
-                                            justify-content: center;
-                                            align-items: center;
-                                            min-height: 100vh;
-                                            background-color: #f0f0f0;
-                                            margin: 0;
-                                            font-family: Arial, sans-serif;
-                                        }
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 e Componentes</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f0f0f0;
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
 
-                                        .board-container {
-                                            display: flex;
-                                            gap: 50px;
-                                        }
+        .board-container {
+            display: flex;
+            gap: 30px; /* Reduzido para aproximar os componentes */
+            align-items: center;
+        }
 
-                                        .components-container {
-                                            display: flex;
-                                            flex-direction: column;
-                                            gap: 30px; /* Espaço entre sensor e display */
-                                        }
+        .components-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px; /* Espaço ajustado entre sensor e display */
+        }
 
-                                        .esp32-board, .sensor-board, .display-board {
-                                            background-color: #333;
-                                            border-radius: 8px;
-                                            position: relative;
-                                            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-                                            display: flex;
-                                            justify-content: space-between;
-                                            padding: 0 10px;
-                                            box-sizing: border-box;
-                                        }
+        .esp32-board, .sensor-board, .display-board {
+            background-color: #333;
+            border-radius: 8px;
+            position: relative;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            display: flex;
+            justify-content: space-between;
+            padding: 0 10px;
+            box-sizing: border-box;
+        }
 
-                                        .esp32-board {
-                                            width: 120px;
-                                            height: 430px;
-                                        }
+        .esp32-board {
+            width: 140px;  /* Largura ajustada */
+            height: 400px; /* Altura ajustada */
+        }
 
-                                        .sensor-board, .display-board {
-                                            width: 150px;
-                                            height: 40px;
-                                            align-items: flex-end;
-                                            padding: 5px;
-                                        }
+        .sensor-board, .display-board {
+            width: 140px; /* Largura ajustada */
+            height: 60px; /* Altura ajustada */
+            align-items: flex-end;
+            padding: 5px;
+        }
 
-                                        .esp32-label, .sensor-label, .display-label {
-                                            position: absolute;
-                                            top: 50%;
-                                            left: 50%;
-                                            transform: translate(-50%, -50%);
-                                            color: #eee;
-                                            font-size: 1.2em;
-                                            font-weight: bold;
-                                            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
-                                            pointer-events: none;
-                                            white-space: nowrap;
-                                        }
+        .esp32-label, .sensor-label, .display-label {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #eee;
+            font-size: 1.2em;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+            pointer-events: none;
+            white-space: nowrap;
+        }
 
-                                        .micro-usb {
-                                            width: 40px;
-                                            height: 15px;
-                                            background-color: #888;
-                                            border-radius: 3px;
-                                            position: absolute;
-                                            top: -10px;
-                                            left: 50%;
-                                            transform: translateX(-50%);
-                                            z-index: 10;
-                                            border: 1px solid #666;
-                                        }
+        .micro-usb {
+            width: 40px;
+            height: 15px;
+            background-color: #888;
+            border-radius: 3px;
+            position: absolute;
+            top: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            border: 1px solid #666;
+        }
 
-                                        .pin-column {
-                                            display: flex;
-                                            flex-direction: column;
-                                            justify-content: space-around;
-                                            height: 100%;
-                                            position: absolute;
-                                        }
+        .pin-column {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-around;
+            height: 100%;
+            position: absolute;
+        }
 
-                                        .pin-column.left {
-                                            left: -10px;
-                                        }
+        /* Colunas rotacionadas 180 graus */
+        .pin-column.left {
+            left: -9px; /* Posição ajustada */
+            transform: rotate(180deg);
+        }
 
-                                        .pin-column.right {
-                                            right: -10px;
-                                        }
+        .pin-column.right {
+            right: -9px; /* Posição ajustada */
+            transform: rotate(180deg);
+        }
+        
+        /* Texto dos pinos rotacionado de volta para a posição correta */
+        .pin-column .pin {
+             transform: rotate(-180deg);
+        }
 
-                                        .pin-row-bottom {
-                                            display: flex;
-                                            justify-content: space-around;
-                                            width: 100%;
-                                            position: absolute;
-                                            bottom: -10px;
-                                            left: 0;
-                                            padding: 0 5px;
-                                            box-sizing: border-box;
-                                        }
+        .pin-row-bottom {
+            display: flex;
+            justify-content: space-around;
+            width: 100%;
+            position: absolute;
+            bottom: -10px;
+            left: 0;
+            padding: 0 5px;
+            box-sizing: border-box;
+        }
 
-                                        .pin {
-                                            width: 20px;
-                                            height: 20px;
-                                            background-color: #bbb;
-                                            border-radius: 50%;
-                                            border: 1px solid #888;
-                                            box-sizing: border-box;
-                                            display: flex;
-                                            justify-content: center;
-                                            align-items: center;
-                                            font-size: 9px;
-                                            color: #444;
-                                            font-weight: bold;
-                                            margin: 3px 0;
-                                            flex-shrink: 0;
-                                        }
+        .pin {
+            width: 18px; /* Tamanho ajustado */
+            height: 18px; /* Tamanho ajustado */
+            background-color: #bbb;
+            border-radius: 50%;
+            border: 1px solid #888;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 8px; /* Fonte ajustada */
+            color: #444;
+            font-weight: bold;
+            margin: 1px 0; /* Margem ajustada */
+            flex-shrink: 0;
+        }
 
-                                        .pin-row-bottom .pin {
-                                            margin: 0 2px;
-                                        }
+        .pin-row-bottom .pin {
+            margin: 0 2px;
+        }
+        
+        .pin.sda, .pin.scl, .pin.vcc5, .pin.vcc3, .pin.gnd, .pin.trig, .pin.echo {
+            color: white;
+        }
 
-                                        .pin.sda {
-                                            background-color: teal;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
-                                        .pin.scl {
-                                            background-color: #4CAF50;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
+        .pin.sda {
+            background-color: teal;
+            border-color: #2E8B57;
+        }
+        .pin.scl {
+            background-color: #4CAF50;
+            border-color: #2E8B57;
+        }
 
-                                        .pin.vcc5 {
-                                            background-color: red;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
-                                        .pin.vcc3 {
-                                            background-color: orange;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
-                                        .pin.gnd {
-                                            background-color: black;
-                                            border-color: #2E8B57;
-                                            color: white;
-                                        }
-                                        .pin.trig {
-                                            background-color: #007bff;
-                                            border-color: #0056b3;
-                                            color: white;
-                                        }
-                                        .pin.echo {
-                                            background-color: #ffc107;
-                                            border-color: #d39e00;
-                                            color: black;
-                                        }
-                                    </style>
-                                </head>
-                                <body>
-                                    <div class="board-container">
-                                        <div class="esp32-board">
-                                            <div class="esp32-label">ESP32</div>
-                                            <div class="micro-usb"></div>
+        .pin.vcc5 {
+            background-color: red;
+            border-color: #c00;
+        }
+        .pin.vcc3 {
+            background-color: orange;
+            border-color: #cc8400;
+        }
+        .pin.gnd {
+            background-color: black;
+            border-color: #333;
+        }
+        .pin.trig {
+            background-color: #007bff;
+            border-color: #0056b3;
+        }
+        .pin.echo {
+            background-color: #ffc107;
+            border-color: #d39e00;
+            color: black;
+        }
+    </style>
+</head>
+<body>
+    <div class="board-container">
+        <div class="esp32-board">
+            <div class="esp32-label">ESP32 <br> Sim800L</div>
+            <div class="micro-usb"></div>
 
-                                            <div class="pin-column left">
-                                                <div class="pin vcc3" title="3V3">3V3</div>
-                                                <div class="pin gnd" title="GND">GND</div>
-                                                <div class="pin" title="D15">D15</div>
-                                                <div class="pin" title="D2">D2</div>
-                                                <div class="pin" title="D4">D4</div>
-                                                <div class="pin" title="RX2">RX2</div>
-                                                <div class="pin" title="TX2">TX2</div>
-                                                <div class="pin" title="D5">D5</div>
-                                                <div class="pin" title="D18">D18</div>
-                                                <div class="pin" title="D19">D19</div>
-                                                <div class="pin sda" title="D21 (SDA)">D21</div>
-                                                <div class="pin" title="RX0">RX0</div>
-                                                <div class="pin" title="TX0">TX0</div>
-                                                <div class="pin scl" title="D22 (SCL)">D22</div>
-                                                <div class="pin" title="D23">D23</div>
-                                            </div>
+            <div class="pin-column left">
+                <div class="pin vcc5" title="5V">5V</div>
+                <div class="pin cmd" title="CMD">CMD</div>
+                <div class="pin sd" title="SD3">SD3</div>
+                <div class="pin sd" title="SD2">SD2</div>
+                <div class="pin" title="GPIO13">13</div>
+                <div class="pin gnd" title="GND">GND</div>
+                <div class="pin trig" title="GPIO12">12</div>
+                <div class="pin echo" title="GPIO14">14</div>
+                <div class="pin" title="GPIO27">27</div>
+                <div class="pin" title="GPIO26">26</div>
+                <div class="pin" title="GPIO25">25</div>
+                <div class="pin" title="GPIO33">33</div>
+                <div class="pin" title="GPIO32">32</div>
+                <div class="pin" title="GPIO35">35</div>
+                <div class="pin" title="GPIO34">34</div>
+                <div class="pin" title="SVN">SVN</div>
+                <div class="pin" title="SVP">SVP</div>
+                <div class="pin" title="EV">EV</div>
+                <div class="pin vcc3" title="3.3V">3.3</div>
+            </div>
 
-                                            <div class="pin-column right">
-                                                <div class="pin vcc5" title="VIN">VIN</div>
-                                                <div class="pin gnd" title="GND">GND</div>
-                                                <div class="pin trig" title="D13">D13</div>
-                                                <div class="pin echo" title="D12">D12</div>
-                                                <div class="pin" title="D14">D14</div>
-                                                <div class="pin" title="D27">D27</div>
-                                                <div class="pin" title="D26">D26</div>
-                                                <div class="pin" title="D25">D25</div>
-                                                <div class="pin" title="D33">D33</div>
-                                                <div class="pin" title="D32">D32</div>
-                                                <div class="pin" title="D35">D35</div>
-                                                <div class="pin" title="D33">D33</div>
-                                                <div class="pin" title="VN">VN</div>
-                                                <div class="pin" title="VP">VP</div>
-                                                <div class="pin" title="EN">EN</div>
-                                            </div>
-                                        </div>
+            <div class="pin-column right">
+                <div class="pin" title="CLK">CLK</div>
+                <div class="pin" title="SDO">SDO</div>
+                <div class="pin" title="SDI">SDI</div>
+                <div class="pin sda" title="GPIO15">15</div>
+                <div class="pin scl" title="GPIO2">2</div>
+                <div class="pin" title="GPIO0">0</div>
+                <div class="pin" title="GPIO4">4</div>
+                <div class="pin nc" title="NC">NC</div>
+                <div class="pin nc" title="NC">NC</div>
+                <div class="pin" title="GPIO5">5</div>
+                <div class="pin" title="GPIO18">18</div>
+                <div class="pin" title="GPIO19">19</div>
+                <div class="pin gnd" title="GND">GND</div>
+                <div class="pin" title="GPIO21">21</div>
+                <div class="pin rx" title="RXD">RX</div>
+                <div class="pin tx" title="TXD">TX</div>
+                <div class="pin" title="GPIO22">22</div>
+                <div class="pin" title="GPIO23">23</div>
+                <div class="pin gnd" title="GND">GND</div>
+            </div>
+        </div>
 
-                                        <div class="components-container">
-                                            <div class="sensor-board">
-                                                <div class="sensor-label">Sensor</div>
-                                                <div class="pin-row-bottom">
-                                                    <div class="pin vcc5" title="VCC">VCC</div>
-                                                    <div class="pin trig" title="TRIG">TRI</div>
-                                                    <div class="pin echo" title="ECHO">ECH</div>
-                                                    <div class="pin gnd" title="GND">GND</div>
-                                                </div>
-                                            </div>
+        <div class="components-container">
+            <div class="sensor-board">
+                <div class="sensor-label">Sensor</div>
+                <div class="pin-row-bottom">
+                    <div class="pin vcc5" title="VCC">VCC</div>
+                    <div class="pin trig" title="TRIG">TRI</div>
+                    <div class="pin echo" title="ECHO">ECH</div>
+                    <div class="pin gnd" title="GND">GND</div>
+                </div>
+            </div>
 
-                                            <div class="display-board">
-                                                <div class="display-label">Display</div>
-                                                <div class="pin-row-bottom">
-                                                    <div class="pin gnd" title="GND">GND</div>
-                                                    <div class="pin vcc3" title="VCC">VCC</div>
-                                                    <div class="pin scl" title="SCL">SCL</div>
-                                                    <div class="pin sda" title="SDA">SDA</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </body>
-                                </html>
+            <div class="display-board">
+                <div class="display-label">Display</div>
+                <div class="pin-row-bottom">
+                    <div class="pin gnd" title="GND">GND</div>
+                    <div class="pin vcc3" title="VCC">VCC</div>
+                    <div class="pin scl" title="SCL">SCL</div>
+                    <div class="pin sda" title="SDA">SDA</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
   )rawliteral";
 
   server.sendHeader("Content-Type", "text/html; charset=UTF-8");
