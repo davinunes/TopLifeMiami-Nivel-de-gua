@@ -11,8 +11,8 @@
       "url": "http://h2o-miami.davinunes.eti.br/firmware/esp32_v1.0.bin"
     },
     "ESP32-DEVKIT-V1": {
-      "version": 2.0,
-      "url": "http://h2o-miami.davinunes.eti.br/firmware/esp32-devkit-v1-fwv-2.0.bin"
+      "version": 4.0,
+      "url": "http://h2o-miami.davinunes.eti.br/firmware/sketch_apr21a.ino.bin"
     }
   }
 }
