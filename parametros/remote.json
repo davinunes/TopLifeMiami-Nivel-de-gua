@@ -13,6 +13,10 @@
     "ESP32-DEVKIT-V1": {
       "version": 4.0,
       "url": "http://h2o-miami.davinunes.eti.br/firmware/sketch_apr21a.ino.bin"
+    },
+    "ESP32-S3-HELTEC-WIFI-LORA-32-V3": {
+      "version": 2.0,
+      "url": "http://h2o-miami.davinunes.eti.br/firmware/HeltecLoraTestsv2.ino.bin"
     }
   }
 }
