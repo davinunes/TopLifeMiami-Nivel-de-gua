@@ -24,7 +24,7 @@
 #include <Update.h>
 
 // ==================== CONFIGURAÇÕES DA PLACA E FIRMWARE ====================
-#define BOARD_MODEL "ESP32-C3"
+#define BOARD_MODEL "ESP32-C3-OLED-042"
 #define FW_VERSION 2.0
 
 // ==================== CONFIGURAÇÕES DE PINOS (ESP32-C3) ====================
@@ -307,7 +307,7 @@ void switchToAPMode() {
   startAccessPoint();
   StatusInternet = "Modo AP";
   inAPMode = true;
-  ledInterval = 0;
+  ledInterval = 100;
   digitalWrite(LED_PIN, HIGH);
   Serial.println("Modo AP ativado");
 }
@@ -388,7 +388,7 @@ void handleWiFiEvent(WiFiEvent_t event) {
 // ==================== CONTROLE DO LED ====================
 void updateLed() {
   if (inAPMode) {
-    digitalWrite(LED_PIN, HIGH); // Modo AP - LED sempre aceso
+    digitalWrite(LED_PIN, LOW); // Modo AP - LED sempre aceso
   } else {
     // Modo Estação - LED piscando
     if (millis() - lastLedToggle >= ledInterval) {
