@@ -675,8 +675,8 @@ void handleEsquema(){
             <div class="micro-usb"></div>
 
             <div class="pin-column left">
-                <div class="pin" title="GPIO9 (Echo)">9</div>
-                <div class="pin" title="GPIO10 (Trig)">10</div>
+                <div class="pin" title="GPI10 (Echo)">10</div>
+                <div class="pin" title="GPIO09 (Trig)">09</div>
                 <div class="pin" title="GPIO8 (LED)">8</div>
                 <div class="pin" title="GPIO7">7</div>
                 <div class="pin" title="GPIO6 (SCL)">6</div>
