@@ -29,8 +29,8 @@
 
 // ==================== CONFIGURAÇÕES DE PINOS (ESP32-C3) ====================
 #define LED_PIN 8
-#define TRIGGER_PIN 10
-#define ECHO_PIN 9
+#define TRIGGER_PIN 20  // GPIO20 como trigger
+#define ECHO_PIN 21     // GPIO21 como echo
 #define I2C_SDA_PIN 5
 #define I2C_SCL_PIN 6
 
