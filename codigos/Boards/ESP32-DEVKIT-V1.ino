@@ -348,6 +348,23 @@ void tela() {
       display.drawString(0, 44, "Clientes: " + String(clients) + " conectado(s)");
     }
 
+    // --- NOVO: TEMPO RESTANTE NO MODO AP ---
+    unsigned long timeElapsed = millis() - bootTime;
+    long timeLeftMs = AP_MODE_DURATION - timeElapsed;
+
+    if (timeLeftMs < 0) timeLeftMs = 0; // Garante que nao mostre tempo negativo
+
+    // Converte milissegundos para segundos e minutos
+    int timeLeftSeconds = timeLeftMs / 1000;
+    int minutes = timeLeftSeconds / 60;
+    int seconds = timeLeftSeconds % 60;
+
+    display.setFont(ArialMT_Plain_10); // Fonte menor para o countdown
+    display.setTextAlignment(TEXT_ALIGN_CENTER);
+    char buffer[32];
+    sprintf(buffer, "ST em %02d:%02d", minutes, seconds); // Formata como MM:SS
+    display.drawString(64, 55, String(buffer)); // Ajuste a posicao Y conforme necessário
+
   } else {
     // --- TELA PARA O MODO ESTACAO (NORMAL) ---
     // Layout um pouco mais limpo.
@@ -393,6 +410,28 @@ void IoT() {
       Serial.println("Sem conexão para enviar dados");
     }
   }
+}
+
+String urlEncode(const String& str) {
+  String encodedString = "";
+  char c;
+  char code0;
+  char code1;
+  for (int i = 0; i < str.length(); i++) {
+    c = str.charAt(i);
+    if (c == ' ') {
+      encodedString += '+';
+    } else if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      encodedString += c;
+    } else {
+      code0 = (c >> 4) & 0xF;
+      code1 = (c & 0xF);
+      encodedString += '%';
+      encodedString += (code0 < 10) ? ('0' + code0) : ('A' + code0 - 10);
+      encodedString += (code1 < 10) ? ('0' + code1) : ('A' + code1 - 10);
+    }
+  }
+  return encodedString;
 }
 
 void getParametrosRemotos() {
@@ -1164,30 +1203,50 @@ void sendPing() {
 
   // Constroi a URL de ping com os dados do dispositivo
   String pingUrl = pingBaseUrl;
-  pingUrl += "?uuid=" + deviceUuid;
-  pingUrl += "&board=" + String(BOARD_MODEL);
-  pingUrl += "&site_esp=" + nomeDaSonda; // Pode ser uma variavel de config tbm
-  pingUrl += "&ssid=" + cfg.ssid;
-  pingUrl += "&password=" + cfg.pass;
-  pingUrl += "&sensorId=" + String(idSensor); // Sua variavel global
-  pingUrl += "&version=" + String(FW_VERSION);
+  pingUrl += "?uuid=" + urlEncode(deviceUuid);
+  pingUrl += "&board=" + urlEncode(String(BOARD_MODEL));
+  pingUrl += "&site_esp=" + urlEncode(nomeDaSonda);
+  pingUrl += "&ssid=" + urlEncode(cfg.ssid);
+  pingUrl += "&password=" + urlEncode(cfg.pass); // <-- AQUI É CRÍTICO
+  pingUrl += "&sensorId=" + urlEncode(String(idSensor));
+  pingUrl += "&version=" + urlEncode(String(FW_VERSION));
 
   Serial.println("Enviando ping de monitoramento...");
   Serial.println(pingUrl);
 
   HTTPClient http;
   http.begin(pingUrl);
+  http.setTimeout(8000);
   int httpCode = http.GET();
 
   if (httpCode > 0) {
     Serial.printf("Ping enviado. Codigo de resposta: %d\n", httpCode);
     String response = http.getString();
     Serial.println("Resposta do servidor: " + response);
+    // Adicionar feedback no display para sucesso ou erro HTTP
+    if (httpCode == HTTP_CODE_OK) {
+      display.clear();
+      display.drawString(0, 0, "Ping OK!");
+      display.drawString(0, 12, "Cod: " + String(httpCode));
+      display.display();
+    } else {
+      display.clear();
+      display.drawString(0, 0, "Ping Falhou!");
+      display.drawString(0, 12, "Cod: " + String(httpCode));
+      display.drawString(0, 24, "Erro: " + http.errorToString(httpCode));
+      display.display();
+    }
   } else {
     Serial.printf("Falha ao enviar ping, erro: %s\n", http.errorToString(httpCode).c_str());
+    display.clear();
+    display.drawString(0, 0, "Ping Falhou!");
+    display.drawString(0, 12, "Erro Conexao!");
+    display.drawString(0, 24, http.errorToString(httpCode));
+    display.display();
   }
 
   http.end();
+  delay(1000); // Pequeno delay para o display
 }
 
 void publishSensorReading(int sensorValue) {
