@@ -3,8 +3,6 @@
   - Biblioteca de display alterada para U8g2.
   - Mantém todas as funcionalidades originais.
 
-  - Placa: https://ae01.alicdn.com/kf/S9a67326dfe534c50bcd9dc4f1a2fe5774.jpg
-
   Bibliotecas necessárias (instalar via Gerenciador de Bibliotecas do Arduino IDE):
   - "U8g2" by oliver
   - "Ultrasonic" by Erick Simões
@@ -170,39 +168,46 @@ void loop() {
 
 // ==================== FUNÇÃO DE TELA (com U8g2) ====================
 void tela() {
-  u8g2.clearBuffer(); // Limpa o buffer na memória
-  u8g2.setFont(u8g2_font_6x10_tf); // Define a fonte
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
 
   if (inAPMode) {
     // --- TELA PARA MODO ACCESS POINT (SETUP) ---
-    // Centraliza o título
-    const char* title = "MODO SETUP";
-    u8g2_uint_t titleWidth = u8g2.getStrWidth(title);
-    u8g2.drawStr((u8g2.getDisplayWidth() - titleWidth) / 2, 10, title);
+    // Linha 1: Tempo restante para modo estação
+    unsigned long timeElapsed = millis() - bootTime;
+    long timeLeftMs = AP_MODE_DURATION - timeElapsed;
+    if (timeLeftMs < 0) timeLeftMs = 0;
+    int minutes = (timeLeftMs / 1000) / 60;
+    int seconds = (timeLeftMs / 1000) % 60;
+    char timeStr[20];
+    sprintf(timeStr, "Tempo: %02d:%02d", minutes, seconds);
+    u8g2.drawStr(0, 10, timeStr);
 
-    u8g2.drawStr(0, 22, "Rede:");
-    u8g2.drawStr(0, 32, WiFi.softAPSSID().c_str());
+    // Linha 2: Nome da rede AP
+    u8g2.drawStr(0, 22, WiFi.softAPSSID().c_str());
+
+    // Linha 3: IP do AP
+    u8g2.drawStr(0, 34, WiFi.softAPIP().toString().c_str());
 
   } else {
     // --- TELA PARA MODO ESTAÇÃO (NORMAL) ---
+    // Linha 1: Nível da água
     char buffer[20];
     sprintf(buffer, "Nivel: %dcm", distance);
     u8g2.drawStr(0, 10, buffer);
 
-    // Barra de progresso visual para o nível
-    int percent = map(distance, 0, alturaAgua, 0, u8g2.getDisplayWidth());
-    if(percent < 0) percent = 0;
-    if(percent > u8g2.getDisplayWidth()) percent = u8g2.getDisplayWidth();
-    u8g2.drawBox(0, 12, percent, 8);
+    // Linha 2: Status do WiFi
+    const char* wifiStatus = (WiFi.status() == WL_CONNECTED) ? "WiFi: UP" : "WiFi: DOWN";
+    u8g2.drawStr(0, 22, wifiStatus);
 
+    // Linha 3: IP ou mensagem de conexão
     if (WiFi.status() == WL_CONNECTED) {
-      String ip = "IP: " + WiFi.localIP().toString();
-      u8g2.drawStr(0, 32, ip.c_str());
+      u8g2.drawStr(0, 34, WiFi.localIP().toString().c_str());
     } else {
-      u8g2.drawStr(0, 32, "WiFi: Conectando...");
+      u8g2.drawStr(0, 34, "Conectando...");
     }
   }
-  u8g2.sendBuffer(); // Envia o buffer completo para o display
+  u8g2.sendBuffer();
 }
 
 
@@ -382,14 +387,15 @@ void handleWiFiEvent(WiFiEvent_t event) {
 
 // ==================== CONTROLE DO LED ====================
 void updateLed() {
-  if (ledInterval == 0) {
-    digitalWrite(LED_PIN, HIGH);
-    return;
-  }
-  if (millis() - lastLedToggle >= ledInterval) {
-    ledState = !ledState;
-    digitalWrite(LED_PIN, ledState ? HIGH : LOW);
-    lastLedToggle = millis();
+  if (inAPMode) {
+    digitalWrite(LED_PIN, HIGH); // Modo AP - LED sempre aceso
+  } else {
+    // Modo Estação - LED piscando
+    if (millis() - lastLedToggle >= ledInterval) {
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+      lastLedToggle = millis();
+    }
   }
 }
 
