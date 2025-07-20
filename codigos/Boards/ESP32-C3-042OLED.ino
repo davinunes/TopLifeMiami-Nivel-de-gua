@@ -28,7 +28,7 @@
 #define FW_VERSION 2.0
 
 // ==================== CONFIGURAÇÕES DE PINOS (ESP32-C3) ====================
-#define LED_PIN 2
+#define LED_PIN 8
 #define TRIGGER_PIN 10
 #define ECHO_PIN 9
 #define I2C_SDA_PIN 5
