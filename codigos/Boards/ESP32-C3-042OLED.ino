@@ -492,7 +492,225 @@ void handleRoot() {
 }
 
 void handleEsquema(){
-  String html = "<html><body><h1>Esquema Eletrico</h1><p><b>Conexoes para o ESP32-C3:</b></p><ul><li>Sensor Trigger -> GPIO 10</li><li>Sensor Echo -> GPIO 9</li><li>OLED SDA -> GPIO 5</li><li>OLED SCL -> GPIO 6</li></ul></body></html>";
+  String html = R"rawliteral(
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-C3 com Sensor</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f0f0f0;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            gap: 30px;
+        }
+
+        .main-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 30px;
+        }
+
+        .board-container {
+            position: relative;
+            width: 200px;
+            height: 400px;
+            background-color: #333;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            display: flex;
+            justify-content: space-between;
+            padding: 20px 10px;
+            box-sizing: border-box;
+        }
+
+        .board-label {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #eee;
+            font-size: 1.5em;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+            pointer-events: none;
+        }
+
+        .oled-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100px;
+            height: 100px;
+            background-color: #000;
+            border: 2px solid #555;
+            border-radius: 4px;
+        }
+
+        .micro-usb {
+            width: 40px;
+            height: 15px;
+            background-color: #888;
+            border-radius: 3px;
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            border: 1px solid #666;
+        }
+
+        .pin-column {
+            display: flex;
+            flex-direction: column-reverse;
+            justify-content: space-around;
+            height: 100%;
+        }
+
+        .pin {
+            width: 30px;
+            height: 30px;
+            background-color: #bbb;
+            border-radius: 50%;
+            border: 1px solid #888;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 12px;
+            color: #444;
+            font-weight: bold;
+            margin: 3px 0;
+            flex-shrink: 0;
+        }
+
+        /* Cores ESP32 */
+        .pin.v5 { background-color: red; color: white; }
+        .pin.gnd { background-color: black; color: white; }
+        .pin.v3 { background-color: orange; color: white; }
+        .pin.rx { background-color: #007bff; color: white; }
+        .pin.tx { background-color: #ffc107; color: black; }
+        .pin.sda { background-color: teal; color: white; }
+        .pin.scl { background-color: #4CAF50; color: white; }
+        .pin.trigger { background-color: #9C27B0; color: white; }
+        .pin.echo { background-color: #FF5722; color: white; }
+        .pin.led { background-color: #00BCD4; color: white; }
+
+        /* Estilo do Sensor */
+        .sensor-container {
+            position: relative;
+            width: 180px;
+            height: 60px;
+            background-color: #333;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 10px;
+        }
+
+        .sensor-label {
+            color: #eee;
+            font-size: 1.2em;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+            margin-bottom: 15px;
+        }
+
+        .sensor-pins {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            width: 100%;
+            position: absolute;
+            bottom: -15px;
+        }
+
+        .sensor-pin {
+            width: 25px;
+            height: 25px;
+            background-color: #bbb;
+            border-radius: 50%;
+            border: 1px solid #888;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 10px;
+            font-weight: bold;
+            position: relative;
+        }
+
+        /* Cores do Sensor */
+        .sensor-pin.vcc { background-color: red; color: white; }
+        .sensor-pin.trig { background-color: #9C27B0; color: white; }
+        .sensor-pin.echo { background-color: #FF5722; color: white; }
+        .sensor-pin.gnd { background-color: black; color: white; }
+
+        .connection-line {
+            position: absolute;
+            background-color: #666;
+            width: 2px;
+            height: 30px;
+            left: 50%;
+            bottom: -30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <div class="board-container">
+            <div class="board-label">ESP32-C3</div>
+            <div class="oled-display"></div>
+            <div class="micro-usb"></div>
+
+            <div class="pin-column left">
+                <div class="pin" title="GPIO9 (Echo)">9</div>
+                <div class="pin" title="GPIO10 (Trig)">10</div>
+                <div class="pin" title="GPIO8 (LED)">8</div>
+                <div class="pin" title="GPIO7">7</div>
+                <div class="pin" title="GPIO6 (SCL)">6</div>
+                <div class="pin" title="GPIO5 (SDA)">5</div>
+                <div class="pin" title="GPIO4">4</div>
+                <div class="pin" title="GPIO3">3</div>
+            </div>
+
+            <div class="pin-column right">
+                <div class="pin v5" title="V5">V5</div>
+                <div class="pin gnd" title="GND">GD</div>
+                <div class="pin" title="3V3">3V3</div>
+                <div class="pin rx" title="RX">RX</div>
+                <div class="pin tx" title="TX">TX</div>
+                <div class="pin" title="GPIO2">2</div>
+                <div class="pin" title="GPIO1">1</div>
+                <div class="pin" title="GPIO0">0</div>
+            </div>
+        </div>
+
+        <div class="sensor-container">
+            <div class="sensor-label">HC-SR04</div>
+            <div class="sensor-pins">
+                <div class="pin v5" title="VCC">VCC</div>
+                <div class="pin rx" title="Trigger">TRI</div>
+                <div class="pin tx" title="Echo">ECH</div>
+                <div class="pin gnd" title="GND">GND</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
+)rawliteral";
   server.send(200, "text/html", html);
 }
 
