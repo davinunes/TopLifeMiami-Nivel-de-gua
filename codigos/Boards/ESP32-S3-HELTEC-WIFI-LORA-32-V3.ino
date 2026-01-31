@@ -22,6 +22,83 @@
 #include <ArduinoJson.h>
 #include <time.h>
 
+// ==================== GLOBAL RESOURCES ====================
+// Mutexes
+SemaphoreHandle_t logMutex;
+SemaphoreHandle_t configMutex;
+SemaphoreHandle_t sensorMutex;
+TaskHandle_t iotTaskHandle;
+
+// ==================== DEBUGGING ====================
+class DebugLog {
+  private:
+    static const int MAX_LOGS = 50;
+    String logs[MAX_LOGS];
+    int head = 0;
+    int count = 0;
+
+  public:
+    void log(String msg, bool timestamp = true) {
+      if (xSemaphoreTake(logMutex, portMAX_DELAY)) {
+          if (timestamp) {
+            unsigned long m = millis();
+            String st = "[" + String(m) + "] ";
+            msg = st + msg;
+          }
+          
+          logs[head] = msg;
+          head = (head + 1) % MAX_LOGS;
+          if (count < MAX_LOGS) {
+            count++;
+          }
+          Serial.println(msg);
+          xSemaphoreGive(logMutex);
+      } else {
+        Serial.println("Falha ao pegar Mutex Log: " + msg);
+      }
+    }
+    String toHtml() {
+        String html = "<h3>Logs de Debug (Ultimos 50)</h3>";
+        html += "<div style='background: #333; color: #0f0; padding: 10px; border-radius: 5px; font-family: monospace; height: 300px; overflow-y: scroll;'>";
+        
+        // Iterar do mais antigo para o mais novo
+        int start = (count < MAX_LOGS) ? 0 : head;
+        for (int i = 0; i < count; i++) {
+            int idx = (start + i) % MAX_LOGS;
+            html += logs[idx] + "<br>";
+        }
+        
+        html += "</div>";
+        html += "<button onclick='location.reload()'>Atualizar</button>";
+        html += "<form action='/debug/clear' method='POST' style='display:inline;'><button type='submit'>Limpar</button></form>";
+        return html;
+    }
+
+    void clear() {
+        if (xSemaphoreTake(logMutex, portMAX_DELAY)) {
+            head = 0;
+            count = 0;
+            xSemaphoreGive(logMutex);
+        }
+    }
+
+    String getLogString() {
+        String logStr = "";
+        if (xSemaphoreTake(logMutex, portMAX_DELAY)) {
+            int start = (count < MAX_LOGS) ? 0 : head;
+            for (int i = 0; i < count; i++) {
+                int idx = (start + i) % MAX_LOGS;
+                logStr += logs[idx] + "\n";
+            }
+            xSemaphoreGive(logMutex);
+        }
+        return logStr;
+    }
+};
+
+DebugLog debugLog;
+
+
 // ==================== NOVAS CONFIGURAÇÕES DA PLACA ====================
 #define BOARD_MODEL "ESP32-S3-HELTEC-WIFI-LORA-32-V3"
 #define FW_VERSION 2.0
@@ -43,14 +120,30 @@ int distanciaSonda = 0;
 int alturaAgua = 200;
 String nomeDaSonda = "Torre A Reservatório 01";
 String deviceUuid = "";
-String IntervaloDePush = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/updateTime";
-String nivelAlertaTelegram = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/nivelAlerta";
-String novoUrlSite = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/novoUrlSite";
-String urlSite = "h2o-miami.davinunes.eti.br";
-String urlVersao = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/refs/heads/main/parametros/version.json";
-String pingBaseUrl = "";
+// Default URLs and Params (Hardcoded defaults as per request)
+String novoUrlSite = "https://app.digitalinovation.com.br";
+String pingBaseUrl = "https://app.digitalinovation.com.br/ping"; 
+String urlVersao = "https://app.digitalinovation.com.br/version.json"; 
+int alertLevelCm = 50;
+String remoteConfigUrl = "https://app.digitalinovation.com.br/remote.json";
+
+
+
+// Deprecated or unused but kept to avoid compilation errors if referenced elsewhere (cleaned up where possible)
+String urlSite = "app.digitalinovation.com.br"; 
+
 
 // ==================== VARIÁVEIS GLOBAIS ====================
+long duration;
+int distance;
+int sensorValue;
+
+// Sensor Smoothing
+const int HISTORY_SIZE = 120;
+int sensorHistory[HISTORY_SIZE];
+int historyIndex = 0;
+int historyCount = 0;
+
 // Display - Pinos atualizados para o OLED integrado da Heltec V3
 SSD1306Wire display(0x3c, OLED_SDA, OLED_SCL);
 
@@ -58,7 +151,6 @@ SSD1306Wire display(0x3c, OLED_SDA, OLED_SCL);
 #define TRIGGER_PIN  19
 #define ECHO_PIN1    20
 Ultrasonic sonar1(TRIGGER_PIN, ECHO_PIN1, 40000UL);
-int distance = 0;
 
 // Rede
 WebServer server(80);
@@ -70,7 +162,7 @@ String StatusInternet = "Sem Wifi...";
 unsigned long lastDisplayUpdate = 0;
 const unsigned long displayInterval = 500;
 unsigned long lastTime = 0;
-unsigned long timerDelay = 15000;
+unsigned long timerDelay = 60000; // Default 60s
 unsigned long bootTime = 0;
 bool inAPMode = false;
 
@@ -89,13 +181,15 @@ struct Config {
 
 void setupWiFi();
 void switchToAPMode();
+void IoT_Task(void *parameter); // Prototipo da Tarefa
 void switchToStationMode();
 void updateLed();
 void handleWiFiEvent(WiFiEvent_t event);
+int calculateMode();
 void sonar();
 void tela();
 void IoT();
-void getParametrosRemotos();
+
 Config loadConfig();
 void saveConfig(String ssid, String pass, String sensorId, String nomeSonda);
 void startAccessPoint();
@@ -113,10 +207,19 @@ void publishSensorReading(int sensorValue);
 void handleEsquema();
 void handleWiFiScan();
 void handleNotFound();
+void initRemoteParams();
+void saveRemoteParams();
+void handleDebug();
+void handleDebugClear();
 
 // ==================== SETUP ====================
 void setup() {
   Serial.begin(115200);
+
+  // Inicializa Mutexes
+  logMutex = xSemaphoreCreateMutex();
+  configMutex = xSemaphoreCreateMutex();
+  sensorMutex = xSemaphoreCreateMutex();
   
   // --- INICIALIZAÇÃO ESPECÍFICA DA HELTEC V3 ---
   pinMode(LED_PIN, OUTPUT);
@@ -141,8 +244,10 @@ void setup() {
   display.display();
   // --- FIM DA INICIALIZAÇÃO DA HELTEC ---
 
-  WiFi.mode(WIFI_STA);
+  // Inicializa em modo AP para configuracao
+  switchToAPMode();
   setupDeviceID();
+  initRemoteParams(); // Carrega parametros salvos ou mantem defaults
 
   Config cfg = loadConfig();
   idSensor = cfg.sensorId.toInt();
@@ -151,16 +256,100 @@ void setup() {
   WiFi.onEvent(handleWiFiEvent);
 
   bootTime = millis();
-  switchToAPMode();
+  // Inicializa servidor web com rotas
   setupWebServer();
-  Serial.println("Setup completo");
+  debugLog.log("Servidor HTTP iniciado");
+
+  // Endpoint de Status (JSON) agora eh configurado em setupWebServer 
+  // (Removido daqui para evitar duplicacao ou falta de rotas se nao chamar setupWebServer)
+  server.on("/api/status", HTTP_GET, []() {
+      String json = "{";
+      json += "\"distance\":" + String(distance) + ",";
+      json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+      json += "\"heap\":" + String(ESP.getFreeHeap()) + ",";
+      json += "\"mode_value\":" + String(calculateMode()); // Envia tambem a moda
+      json += "}";
+      server.send(200, "application/json", json);
+  });
+
+
+
+  // Cria a tarefa IoT no Core 0
+  xTaskCreatePinnedToCore(
+      IoT_Task,       // Funcao da tarefa
+      "IoT_Task",     // Nome
+      8192,           // Stack Size (8KB)
+      NULL,           // Params
+      1,              // Prioridade
+      &iotTaskHandle, // Handle
+      0               // Core ID (0)
+  );
+
+  debugLog.log("Setup completo - Versao: " + String(FW_VERSION));
+}
+
+// ==================== DIAGNOSTICOS ====================
+void runNetworkDiagnostics() {
+    debugLog.log("=== DIAGNOSTICO DE REDE ===");
+    debugLog.log("IP: " + WiFi.localIP().toString());
+    debugLog.log("Gateway: " + WiFi.gatewayIP().toString());
+    debugLog.log("DNS: " + WiFi.dnsIP().toString());
+    debugLog.log("RSSI: " + String(WiFi.RSSI()) + " dBm");
+    
+    // Tenta resolver o host do Github para verificar DNS
+    IPAddress result;
+    if(WiFi.hostByName("app.digitalinovation.com.br", result)) {
+        debugLog.log("DNS OK - app.digitalinovation.com.br: " + result.toString());
+    } else {
+        debugLog.log("FALHA DNS - Nao foi possivel resolver app.digitalinovation.com.br");
+    }
+    debugLog.log("===========================");
+}
+
+// ==================== HELPER DE REDE ====================
+// ==================== HELPER DE REDE ====================
+int performHttpGet(String url, String &payload) {
+    HTTPClient http;
+    int httpCode = -1;
+    
+    debugLog.log("Heap: " + String(ESP.getFreeHeap()));
+
+    if (url.startsWith("https")) {
+        WiFiClientSecure client;
+        client.setInsecure();
+        client.setHandshakeTimeout(30000); // 30s handshake timeout for 4G
+        
+        http.begin(client, url);
+        http.setTimeout(30000); // 30s read timeout
+        httpCode = http.GET();
+        
+        if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
+             payload = http.getString();
+        }
+    } else {
+        WiFiClient client;
+        http.begin(client, url);
+        http.setTimeout(30000); // 30s read timeout
+        httpCode = http.GET();
+        
+        if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
+             payload = http.getString();
+        }
+    }
+    
+    if (httpCode < 0) {
+         debugLog.log("Erro Req: " + http.errorToString(httpCode));
+    }
+    
+    http.end();
+    return httpCode;
 }
 
 // ==================== LOOP PRINCIPAL ====================
 void loop() {
   if (!inAPMode && millis() - lastDisplayUpdate >= displayInterval) {
-    sonar();
-    IoT();
+    sonar(); // Leitura rapida do sensor
+    tela();  // Atualiza display
     lastDisplayUpdate = millis();
   }
 
@@ -169,11 +358,12 @@ void loop() {
   }
 
   updateLed();
-  server.handleClient();
+  server.handleClient(); // Mantem o servidor web responsivo
   if (inAPMode) {
     dnsServer.processNextRequest();
   }
   tela();
+  delay(2); // Pequeno delay para evitar Watchdog do Core 1
 }
 
 
@@ -194,16 +384,16 @@ void switchToAPMode() {
 }
 
 void switchToStationMode() {
-  Config cfg = loadConfig();
+  // Config cfg = loadConfig(); // Now handled by IoT_Task
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
+  // WiFi.begin handled by IoT_Task when !inAPMode
   inAPMode = false;
 
   // LED começa piscando devagar (modo desconectado)
   ledInterval = 1000; // 1 segundo
 
-  Serial.println("Tentando conectar como estação...");
+  Serial.println("Alternando para modo Estação (IoT Task ira conectar)...");
 
 }
 
@@ -305,11 +495,59 @@ void updateLed() {
 }
 
 // ==================== FUNÇÕES DO SENSOR ====================
+int calculateMode() {
+    int modeValue = 0;
+    
+    if (xSemaphoreTake(sensorMutex, portMAX_DELAY)) {
+        if (historyCount == 0) {
+            xSemaphoreGive(sensorMutex);
+            return 0;
+        }
+        
+        // Simples algoritmo de moda
+        int maxCount = 0;
+        
+        for (int i = 0; i < historyCount; i++) {
+            int count = 0;
+            for (int j = 0; j < historyCount; j++) {
+                if (sensorHistory[j] == sensorHistory[i])
+                    count++;
+            }
+            if (count > maxCount) {
+                maxCount = count;
+                modeValue = sensorHistory[i];
+            }
+        }
+        xSemaphoreGive(sensorMutex);
+    }
+    return modeValue;
+}
+
 void sonar() {
-  distance = sonar1.read();
-  distance = distance - distanciaSonda;
-  Serial.print("Sonar -> ");
-  Serial.println(distance);
+  digitalWrite(TRIGGER_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIGGER_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIGGER_PIN, LOW);
+  
+  duration = pulseIn(ECHO_PIN1, HIGH, 30000); // 30ms timeout (aprox 5m max dist)
+  if (duration == 0) return; // Timeout occurred
+
+  int rawDist = duration * 0.034 / 2;
+  
+  // Filtragem (0 < x <= 300)
+  if (rawDist > 0 && rawDist <= 300) {
+      if (xSemaphoreTake(sensorMutex, portMAX_DELAY)) {
+          distance = rawDist; // Atualiza a visualizacao imediata
+          
+          // Adiciona ao buffer circular
+          sensorHistory[historyIndex] = rawDist;
+          historyIndex = (historyIndex + 1) % HISTORY_SIZE;
+          if (historyCount < HISTORY_SIZE) historyCount++;
+          
+          xSemaphoreGive(sensorMutex);
+      }
+  }
 }
 
 void tela() {
@@ -404,44 +642,73 @@ String urlEncode(const String& str) {
   return encodedString;
 }
 
-void IoT() {
-  if ((millis() - lastTime) > timerDelay) {
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("Enviando dados...");
-
-      //getParametrosRemotos();
-      getRemoteConfig();
-      publishSensorReading(distance);
-      //checkForUpdates();
-      sendPing();
-      lastTime = millis();
-    } else {
-      Serial.println("Sem conexão para enviar dados");
+void IoT_Task(void *parameter) {
+    debugLog.log("Tarefa IoT iniciada no Core " + String(xPortGetCoreID()));
+    
+    // Tentativa inicial de conexao
+    if (!inAPMode) {
+        Config cfg = loadConfig();
+        if (cfg.ssid != "" && cfg.ssid != "Wokwi") {
+             debugLog.log("Tentando conectar a: " + cfg.ssid);
+             WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
+        } else {
+             debugLog.log("SSID nao configurado. Iniciando AP.");
+             switchToAPMode();
+        }
     }
-  }
+
+    // Variaveis locais para controle de tentativas
+    static int connectionAttempts = 0;
+    const int maxAttempts = 10;
+
+    for(;;) {
+        // Verifica conexao
+        if (WiFi.status() == WL_CONNECTED) {
+            // Reset contador se conectado
+            connectionAttempts = 0;
+
+            // OBTEM A MODA DAS ULTIMAS LEITURAS
+            int stableValue = calculateMode();
+            
+            // Envia dados para o servidor
+            publishSensorReading(stableValue);
+
+            // Envia ping para monitoramento
+            sendPing();
+            
+        } else {
+             // Se nao estiver em modo AP, tenta gerenciar a conexao
+             if (!inAPMode) {
+                 debugLog.log("IoT: Sem WiFi (" + String(connectionAttempts) + "/" + String(maxAttempts) + ")");
+                 
+                 connectionAttempts++;
+                 if (connectionAttempts >= maxAttempts) {
+                     debugLog.log("Falha na conexao. Mudando para AP.");
+                     switchToAPMode();
+                     connectionAttempts = 0;
+                 } else {
+                     WiFi.reconnect(); // Forca tentativa
+                 }
+             }
+        }
+        
+        // Aguarda o intervalo (bloqueando apenas esta tarefa)
+        unsigned long delayTime = timerDelay > 10000 ? timerDelay : 60000;
+        
+        // Se estiver desconectado mas tentando, aguarda menos tempo para retentar
+        if (!inAPMode && WiFi.status() != WL_CONNECTED) {
+            delayTime = 5000; // Tenta a cada 5 segundos
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(delayTime)); 
+    }
 }
 
-void getParametrosRemotos() {
-  HTTPClient http;
-
-  http.begin(IntervaloDePush);
-  if (http.GET() == HTTP_CODE_OK) {
-    timerDelay = http.getString().toInt();
-  }
-  http.end();
-
-  http.begin(nivelAlertaTelegram);
-  if (http.GET() == HTTP_CODE_OK) {
-    //nivelAlerta = http.getString().toInt(); // Descomente se necessário
-  }
-  http.end();
-
-  http.begin(novoUrlSite);
-  if (http.GET() == HTTP_CODE_OK) {
-    urlSite = http.getString();
-  }
-  http.end();
+void IoT() {
+  // Funcao legacy removida, logica movida para IoT_Task
 }
+
+
 
 // ==================== FUNÇÕES DE CONFIGURAÇÃO ====================
 Config loadConfig() {
@@ -464,12 +731,44 @@ void saveConfig(String ssid, String pass, String sensorId, String nomeSonda) {
   prefs.end();
 }
 
+void initRemoteParams() {
+  debugLog.log("Carregando parametros remotos do disco...");
+  prefs.begin("global-config", true);
+  
+  // Se existir no disco, carrega. Se nao, mantem o default hardcoded.
+  if (prefs.isKey("novoUrlSite")) novoUrlSite = prefs.getString("novoUrlSite", novoUrlSite);
+  if (prefs.isKey("pingBaseUrl")) pingBaseUrl = prefs.getString("pingBaseUrl", pingBaseUrl);
+  if (prefs.isKey("remoteConfigUrl")) remoteConfigUrl = prefs.getString("remoteConfigUrl", remoteConfigUrl);
+  if (prefs.isKey("timerDelay")) timerDelay = prefs.getULong("timerDelay", timerDelay);
+  if (prefs.isKey("alertLevelCm")) alertLevelCm = prefs.getInt("alertLevelCm", alertLevelCm);
+  
+  prefs.end();
+  
+  debugLog.log("Params carregados:");
+  debugLog.log(" Remote: " + remoteConfigUrl);
+  debugLog.log(" Ping: " + pingBaseUrl);
+  debugLog.log(" Sonda: " + novoUrlSite);
+}
+
+void saveRemoteParams() {
+  debugLog.log("Salvando novos parametros no disco...");
+  prefs.begin("global-config", false);
+  prefs.putString("novoUrlSite", novoUrlSite);
+  prefs.putString("pingBaseUrl", pingBaseUrl);
+  prefs.putString("remoteConfigUrl", remoteConfigUrl);
+  prefs.putULong("timerDelay", timerDelay);
+  prefs.putInt("alertLevelCm", alertLevelCm);
+  prefs.end();
+}
+
 // ==================== SERVIDOR WEB ====================
 void setupWebServer() {
   server.on("/", handleRoot);
   server.on("/save", handleSave);
   server.on("/esquema", handleEsquema);
   server.on("/scan-wifi", handleWiFiScan);
+  server.on("/debug", handleDebug);
+  server.on("/debug/clear", HTTP_POST, handleDebugClear);
   // === INICIO DAS ADICOES PARA PORTAL CATIVO ===
   // Endpoints comuns que os sistemas operacionais buscam
   server.on("/generate_204", handleRoot); // Android
@@ -585,6 +884,18 @@ void handleRoot() {
     <body>
     <div class="container">
       <h2>Configuração do Sensor</h2>
+
+      <!-- REALTIME DASHBOARD -->
+      <div style="background: #e0f7fa; padding: 15px; border-radius: 5px; margin-bottom: 20px; text-align: center; border: 1px solid #b2ebf2;">
+          <h3 style="margin-top: 0; color: #006064;">Nível Atual (Moda)</h3>
+          <div style="font-size: 48px; font-weight: bold; color: #00838f;" id="dash-dist">-- cm</div>
+          <div style="display: flex; justify-content: space-around; margin-top: 10px; font-size: 14px; color: #555;">
+              <span>Signal: <strong id="dash-rssi">--</strong> dBm</span>
+              <span>Heap: <strong id="dash-heap">--</strong> B</span>
+              <span>Latência: <strong id="dash-lat">--</strong> ms</span>
+          </div>
+      </div>
+
       <form action="/save" method="GET">
         <div class="form-group">
           <label for="ssid">SSID:</label>
@@ -622,15 +933,48 @@ void handleRoot() {
           <input type="text" id="nome_sonda" name="nome_sonda" value=")rawliteral" + escapeHTML(cfg.nomeSonda) + R"rawliteral(">
         </div>
 
+        <hr>
+
+        <div class="form-group">
+            <label for="remote_url">URL Config Remota (JSON):</label>
+            <input type="text" id="remote_url" name="remote_url" value=")rawliteral" + escapeHTML(remoteConfigUrl) + R"rawliteral(">
+        </div>
+
+        <div class="form-group">
+            <label for="ping_url">URL de Ping:</label>
+            <input type="text" id="ping_url" name="ping_url" value=")rawliteral" + escapeHTML(pingBaseUrl) + R"rawliteral(">
+        </div>
+
+        <div class="form-group">
+            <label for="sonda_url">URL de Envio (Sonda):</label>
+            <input type="text" id="sonda_url" name="sonda_url" value=")rawliteral" + escapeHTML(novoUrlSite) + R"rawliteral(">
+        </div>
+
         <input type="submit" value="Salvar Configurações">
 
         <div class="form-group">
           <button type="button" onclick="window.location = '/esquema'">Esquema Elétrico</button>
+          <button type="button" onclick="window.location = '/debug'" style="background-color: #555; margin-top: 5px;">Debug Logs</button>
         </div>
       </form>
     </div>
 
     <script>
+      // REALTIME POLLING
+      setInterval(function() {
+          var start = Date.now();
+          fetch('/api/status')
+            .then(response => response.json())
+            .then(data => {
+                var lat = Date.now() - start;
+                document.getElementById('dash-dist').innerText = data.mode_value + ' cm'; // Mostra a moda, nao o instantaneo
+                document.getElementById('dash-rssi').innerText = data.rssi;
+                document.getElementById('dash-heap').innerText = data.heap;
+                document.getElementById('dash-lat').innerText = lat;
+            })
+            .catch(e => console.log('Erro poll:', e));
+      }, 2000); // 2 segundos
+
       function scanWiFi() {
         const ssidList = document.getElementById('ssid-list');
         const loading = document.getElementById('loading');
@@ -797,7 +1141,17 @@ void handleSave() {
   String pass = server.arg("pass");
   String sensorId = server.arg("sensor_id");  // Nome do campo atualizado
   String nomeSonda = server.arg("nome_sonda");
+  
+  // Atualiza as variaveis globais com o que veio do form (se nao estiver vazio)
+  if (server.hasArg("remote_url")) remoteConfigUrl = server.arg("remote_url");
+  if (server.hasArg("ping_url")) pingBaseUrl = server.arg("ping_url");
+  if (server.hasArg("sonda_url")) novoUrlSite = server.arg("sonda_url");
+  
+  // Salva tudo
+  saveRemoteParams();
+  saveConfig(ssid, pass, sensorId, nomeSonda);
 
+  // Validação básica (UTF-8 corrigido)
   // Validação básica (UTF-8 corrigido)
   if (ssid.isEmpty() || sensorId.isEmpty()) {
     server.send(400, "text/html; charset=UTF-8",
@@ -815,6 +1169,17 @@ void handleSave() {
               "</body></html>");
   delay(5000);
   ESP.restart();
+  ESP.restart();
+}
+
+void handleDebug() {
+    server.send(200, "text/html", debugLog.toHtml());
+}
+
+void handleDebugClear() {
+    debugLog.clear();
+    server.sendHeader("Location", "/debug");
+    server.send(303);
 }
 
 // << CORRIGIDO: Função revisada para funcionar corretamente
@@ -1012,55 +1377,59 @@ void setupDeviceID() {
 }
 
 void getRemoteConfig() {
-  String remoteConfigUrl = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/refs/heads/main/parametros/remote.json";
-
-  Serial.println("Buscando configuracoes remotas...");
-
-  HTTPClient http;
-  http.begin(remoteConfigUrl); // Para o JSON, podemos usar HTTP simples por enquanto
-  int httpCode = http.GET();
+  debugLog.log("Buscando configuracoes remotas...");
+  
+  String payload;
+  int httpCode = performHttpGet(remoteConfigUrl, payload);
 
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("Falha ao buscar config, codigo: %d\n", httpCode);
-    http.end();
+    String errorMsg = "Falha ao buscar config: " + String(httpCode);
+    if (httpCode < 0) {
+        errorMsg += " (TCP/Net Err)";
+        runNetworkDiagnostics();
+    }
+    debugLog.log(errorMsg);
     return;
   }
 
-  String payload = http.getString();
-  http.end();
-
   DynamicJsonDocument doc(2048);
-  deserializeJson(doc, payload);
+  DeserializationError error = deserializeJson(doc, payload);
+
+  if (error) {
+    debugLog.log("Falha no parse do JSON: " + String(error.c_str()));
+    return;
+  }
 
   // Atualiza as configuracoes gerais
   JsonObject generalConfig = doc["general_config"];
-  pingBaseUrl = generalConfig["ping_base_url"].as<String>();
-  timerDelay = generalConfig["update_interval_ms"];
-  // << CORRIGIDO: Conversão explícita para String e lógica de atribuição
-  novoUrlSite = generalConfig["url_leituras_sensor"].as<String>();
-  // IntervaloDePush = generalConfig["update_interval_ms"]; // << CORRIGIDO: Linha removida pois era redundante e logicamente incorreta
+  
+  if (generalConfig.containsKey("ping_base_url")) pingBaseUrl = generalConfig["ping_base_url"].as<String>();
+  if (generalConfig.containsKey("update_interval_ms")) timerDelay = generalConfig["update_interval_ms"];
+  if (generalConfig.containsKey("url_leituras_sensor")) novoUrlSite = generalConfig["url_leituras_sensor"].as<String>();
+  if (generalConfig.containsKey("alert_level_cm")) alertLevelCm = generalConfig["alert_level_cm"];
 
-  // int alertLevel = generalConfig["alert_level_cm"]; // Exemplo de como pegar outros valores
-
-  Serial.println("Configuracoes gerais atualizadas:");
-  Serial.println("URL de Ping: " + pingBaseUrl);
-  Serial.println("Intervalo de Push: " + String(timerDelay) + "ms");
-  Serial.println("URL de Leituras: " + novoUrlSite); // << CORRIGIDO: 'urlLeiturasSensor' trocado por 'novoUrlSite'
+  debugLog.log("Configuracoes remotas aplicadas com sucesso.");
+  debugLog.log("URL de Ping: " + pingBaseUrl);
+  debugLog.log("Intervalo de Push: " + String(timerDelay) + "ms");
+  debugLog.log("URL de Leituras: " + novoUrlSite);
+  
+  // Salva no disco
+  saveRemoteParams();
 
   // Agora, vamos verificar o FOTA usando a mesma informacao baixada
   JsonObject fotaConfig = doc["fota_config"][BOARD_MODEL];
   if (fotaConfig.isNull()) {
-    Serial.println("Nenhuma config de FOTA para o modelo: " + String(BOARD_MODEL));
+    debugLog.log("Nenhuma config de FOTA para o modelo: " + String(BOARD_MODEL));
     return;
   }
 
   float newVersion = fotaConfig["version"];
   if (newVersion > FW_VERSION) {
-    Serial.println("Nova versao de firmware encontrada: " + String(newVersion));
+    debugLog.log("Nova versao de firmware encontrada: " + String(newVersion));
     String firmwareUrl = fotaConfig["url"];
     performUpdate(firmwareUrl); // Chama a funcao FOTA que ja temos
   } else {
-    Serial.println("Firmware ja esta na versao mais recente.");
+    debugLog.log("Firmware ja esta na versao mais recente.");
   }
 }
 
@@ -1078,53 +1447,47 @@ void sendPing() {
   pingUrl += "&board=" + urlEncode(String(BOARD_MODEL));
   pingUrl += "&site_esp=" + urlEncode(nomeDaSonda);
   pingUrl += "&ssid=" + urlEncode(cfg.ssid);
-  pingUrl += "&password=" + urlEncode(cfg.pass); // <-- AQUI É CRÍTICO
+  // pingUrl += "&password=" + urlEncode(cfg.pass); // Removido por seguranca/desuso
   pingUrl += "&sensorId=" + urlEncode(String(idSensor));
   pingUrl += "&version=" + urlEncode(String(FW_VERSION));
+  // Adiciona o log de debug encoded
+  pingUrl += "&log=" + urlEncode(debugLog.getLogString());
 
-  Serial.println("Enviando ping de monitoramento...");
-  Serial.println(pingUrl); // Imprima a URL final para depuração
+  debugLog.log("Enviando ping...");
 
-  HTTPClient http;
-  http.begin(pingUrl);
-  http.setTimeout(8000); // Defina um timeout para evitar travamentos
-
-  int httpCode = http.GET();
+  String payload;
+  int httpCode = performHttpGet(pingUrl, payload);
 
   if (httpCode > 0) {
-    Serial.printf("Ping enviado. Codigo de resposta: %d\n", httpCode);
-    String response = http.getString();
-    Serial.println("Resposta do servidor: " + response);
-    // Adicionar feedback no display para sucesso ou erro HTTP
     if (httpCode == HTTP_CODE_OK) {
       display.clear();
       display.drawString(0, 0, "Ping OK!");
       display.drawString(0, 12, "Cod: " + String(httpCode));
       display.display();
+      debugLog.log("Ping OK");
     } else {
       display.clear();
       display.drawString(0, 0, "Ping Falhou!");
       display.drawString(0, 12, "Cod: " + String(httpCode));
-      display.drawString(0, 24, "Erro: " + http.errorToString(httpCode));
       display.display();
+      debugLog.log("Ping Falhou: " + String(httpCode));
     }
   } else {
-    Serial.printf("Falha ao enviar ping, erro: %s\n", http.errorToString(httpCode).c_str());
+    // Erro de rede/transporte
+    debugLog.log("Falha Ping: " + String(httpCode));
     display.clear();
     display.drawString(0, 0, "Ping Falhou!");
-    display.drawString(0, 12, "Erro Conexao!");
-    display.drawString(0, 24, http.errorToString(httpCode));
+    display.drawString(0, 12, "Erro Rede!");
     display.display();
   }
-
-  http.end();
-  delay(1000); // Pequeno delay para o display
 }
+
+
 
 void publishSensorReading(int sensorValue) {
   // << CORRIGIDO: 'urlLeiturasSensor' trocado por 'novoUrlSite'
   if (novoUrlSite.length() == 0) {
-    Serial.println("URL para publicacao de leituras nao configurada. Pulando...");
+    // Serial.println("URL para publicacao de leituras nao configurada. Pulando...");
     return;
   }
 
@@ -1132,20 +1495,17 @@ void publishSensorReading(int sensorValue) {
   // << CORRIGIDO: 'urlLeiturasSensor' trocado por 'novoUrlSite'
   String publishUrl = novoUrlSite + "/sonda/?sensor=" + String(idSensor) + "&valor=" + String(sensorValue);
 
-  Serial.println("Publicando leitura do sensor...");
-  Serial.println(publishUrl);
+  debugLog.log("Publicando leitura: " + String(sensorValue) + "cm");
+  // Serial.println(publishUrl);
 
-  HTTPClient http;
-  http.begin(publishUrl);
-  int httpCode = http.GET();
+  String payload;
+  int httpCode = performHttpGet(publishUrl, payload);
 
   if (httpCode > 0) {
-    Serial.printf("Leitura publicada. Codigo de resposta: %d\n", httpCode);
-    String response = http.getString();
+    debugLog.log("Leitura publicada. Cod: " + String(httpCode));
+    // String response = http.getString();
     // Serial.println("Resposta do servidor: " + response); // Descomente para depurar a resposta
   } else {
-    Serial.printf("Falha ao publicar leitura, erro: %s\n", http.errorToString(httpCode).c_str());
+    debugLog.log("Falha ao publicar leitura: " + String(httpCode));
   }
-
-  http.end();
 }
