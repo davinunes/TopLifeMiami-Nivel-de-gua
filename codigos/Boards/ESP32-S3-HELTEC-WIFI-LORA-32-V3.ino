@@ -679,16 +679,28 @@ void IoT_Task(void *parameter) {
         } else {
              // Se nao estiver em modo AP, tenta gerenciar a conexao
              if (!inAPMode) {
+                 connectionAttempts++;
                  debugLog.log("IoT: Sem WiFi (" + String(connectionAttempts) + "/" + String(maxAttempts) + ")");
                  
-                 connectionAttempts++;
-                 if (connectionAttempts >= maxAttempts) {
+                 // Na primeira tentativa da sequencia, carrega as credenciais e inicia a conexao
+                 if (connectionAttempts == 1) {
+                      Config cfg = loadConfig();
+                      if (cfg.ssid != "" && cfg.ssid != "Wokwi") {
+                          debugLog.log("Iniciando conexao com: " + cfg.ssid);
+                          WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
+                      } else {
+                          debugLog.log("SSID nao configurado. Mudando para AP.");
+                          switchToAPMode();
+                          connectionAttempts = 0;
+                      }
+                 }
+                 else if (connectionAttempts >= maxAttempts) {
                      debugLog.log("Falha na conexao. Mudando para AP.");
                      switchToAPMode();
                      connectionAttempts = 0;
-                 } else {
-                     WiFi.reconnect(); // Forca tentativa
-                 }
+                 } 
+                 // Nas tentativas intermediarias (2-9), apenas aguardamos o WiFi.begin fazer efeito
+                 // ou chamamos reconnect se quisermos forcar (mas begin ja deve bastar)
              }
         }
         
