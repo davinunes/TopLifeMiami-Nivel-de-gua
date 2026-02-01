@@ -102,7 +102,7 @@ DebugLog debugLog;
 
 // ==================== NOVAS CONFIGURAÇÕES DA PLACA ====================
 #define BOARD_MODEL "ESP32-S3-HELTEC-WIFI-LORA-32-V3"
-#define FW_VERSION 2.0
+#define FW_VERSION 3.0
 #define OLED_SDA 17
 #define OLED_SCL 18
 #define OLED_RST 21
@@ -705,6 +705,9 @@ void IoT_Task(void *parameter) {
             // Envia dados para o servidor
             publishSensorReading(stableValue);
 
+            // Verifica por atualizacoes de firmware e configuracoes
+            getRemoteConfig();
+
             // Envia ping para monitoramento
             sendPing();
             
@@ -1244,20 +1247,27 @@ void performUpdate(String url) {
     display.display();
 
     // Nao precisamos mais do WiFiClientSecure para um teste HTTP
+    // Configura Client (Secure ou Insecure) usando HEAP para nao estourar a stack do setup()
     HTTPClient http;
-    http.begin(url); // A URL aqui eh a do seu servidor HTTP para o .bin
-    http.setTimeout(15000);
+    WiFiClientSecure *clientSecure = nullptr;
+    WiFiClient *clientInsecure = nullptr;
+    
+    if (url.startsWith("https")) {
+        clientSecure = new WiFiClientSecure();
+        clientSecure->setInsecure();
+        clientSecure->setHandshakeTimeout(30000); 
+        http.begin(*clientSecure, url);
+    } else {
+        clientInsecure = new WiFiClient();
+        http.begin(*clientInsecure, url);
+    }
+    
+    http.setTimeout(30000);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
     int httpCode = http.GET();
 
-    // Mantemos a logica de redirecionamento, pois eh uma boa pratica,
-    // embora seja menos provavel que seu servidor a use.
-    if (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
-        String newUrl = http.header("Location");
-        http.end();
-        http.begin(newUrl);
-        httpCode = http.GET();
-    }
+    // Logica manual de redirect removida em favor de setFollowRedirects
 
     if (httpCode != HTTP_CODE_OK) {
         Serial.printf("Erro no download, codigo: %d\n", httpCode);
@@ -1297,25 +1307,34 @@ void performUpdate(String url) {
 
     if (written != contentLength) {
         Serial.printf("Escrita falhou! Escrito %d de %d bytes\n", written, contentLength);
-        http.end();
-        return;
+    } else {
+        Serial.println("Escrita OK. Finalizando...");
+        if (Update.end()) {
+             Serial.println("Update Completo! Rebooting...");
+             display.clear();
+             display.drawString(0, 0, "Update Completo!");
+             display.drawString(0, 20, "Reiniciando...");
+             display.display();
+             delay(1000);
+             
+             // Limpeza antes do reboot
+             http.end();
+             if (clientSecure) delete clientSecure;
+             if (clientInsecure) delete clientInsecure;
+             
+             ESP.restart();
+        } else {
+             Serial.printf("Update falhou. Erro #: %d\n", Update.getError());
+             display.clear();
+             display.drawString(0, 0, "Update Falhou!");
+             display.drawString(0, 20, "Erro #" + String(Update.getError()));
+             display.display();
+        }
     }
-
-    if (!Update.end()) {
-        Serial.println("Erro ao finalizar a atualizacao: " + String(Update.getError()));
-        http.end();
-        return;
-    }
-
-    Serial.println("Atualizacao finalizada com sucesso!");
-    display.clear();
-    display.drawString(0, 20, "Atualizado!");
-    display.drawString(0, 40, "Reiniciando...");
-    display.display();
-
+    
     http.end();
-    delay(2000);
-    ESP.restart();
+    if (clientSecure) delete clientSecure;
+    if (clientInsecure) delete clientInsecure;
 }
 
 void checkForUpdates() {
