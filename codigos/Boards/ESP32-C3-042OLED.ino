@@ -15,17 +15,22 @@
 #include <HTTPClient.h>
 #include <WebServer.h>
 #include <Preferences.h>
-#include <U8g2lib.h> // <--- SUBSTITUÍDA
+#include <WiFiClientSecure.h>
+#include <U8g2lib.h>
 #include <Ultrasonic.h>
 #include <Wire.h>
 #include <DNSServer.h>
 #include <ArduinoJson.h>
 #include <time.h>
 #include <Update.h>
+#include "mbedtls/base64.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 
 // ==================== CONFIGURAÇÕES DA PLACA E FIRMWARE ====================
 #define BOARD_MODEL "ESP32-C3-OLED-042"
-#define FW_VERSION 2.0
+#define FW_VERSION 3.0
 
 // ==================== CONFIGURAÇÕES DE PINOS (ESP32-C3) ====================
 #define LED_PIN 8
@@ -51,14 +56,123 @@ int idSensor = 3;
 int distanciaSonda = 0;
 int alturaAgua = 200;
 String nomeDaSonda = "Torre A Reservatório 01";
+String novoUrlSite = "https://app.digitalinovation.com.br";
+String urlVersao = "https://app.digitalinovation.com.br/version.json";
+String remoteConfigUrl = "https://app.digitalinovation.com.br/remote.json";
+String pingBaseUrl = "https://app.digitalinovation.com.br/ping/";
+int alertLevelCm = 50;
 String deviceUuid = "";
-String pingBaseUrl = "";
-String novoUrlSite = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/main/parametros/novoUrlSite";
-String urlVersao = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/refs/heads/main/parametros/version.json";
 
 // ==================== VARIÁVEIS GLOBAIS ====================
-Ultrasonic sonar1(TRIGGER_PIN, ECHO_PIN, 40000UL);
+// ==================== CLASSE DE LOG (CIRCULAR BUFFER) ====================
+#define LOG_SIZE 2048
+class DebugLog {
+  private:
+    char buffer[LOG_SIZE];
+    int head;
+    bool wrapped;
+    SemaphoreHandle_t mutex;
+  
+  public:
+    DebugLog() : head(0), wrapped(false) {
+        mutex = xSemaphoreCreateMutex();
+        memset(buffer, 0, LOG_SIZE);
+    }
+
+    void log(String msg) {
+        if (mutex != NULL) xSemaphoreTake(mutex, portMAX_DELAY);
+        
+        String timeStr = "[" + String(millis()) + "] ";
+        String fullMsg = timeStr + msg + "\n";
+        
+        // Serial output imediato
+        Serial.print(fullMsg);
+        
+        // Circular Buffer
+        for(int i=0; i < fullMsg.length(); i++) {
+            buffer[head] = fullMsg[i];
+            head++;
+            if(head >= LOG_SIZE) {
+                head = 0;
+                wrapped = true;
+            }
+        }
+        
+        if (mutex != NULL) xSemaphoreGive(mutex);
+    }
+    
+    String getLogString() {
+        if (mutex != NULL) xSemaphoreTake(mutex, portMAX_DELAY);
+        String s = "";
+        s.reserve(LOG_SIZE);
+        
+        if (wrapped) {
+            for(int i=head; i < LOG_SIZE; i++) s += buffer[i];
+            for(int i=0; i < head; i++) s += buffer[i];
+        } else {
+            for(int i=0; i < head; i++) s += buffer[i];
+        }
+        
+        if (mutex != NULL) xSemaphoreGive(mutex);
+        return s;
+    }
+    
+    void clear() {
+        if (mutex != NULL) xSemaphoreTake(mutex, portMAX_DELAY);
+        head = 0;
+        wrapped = false;
+        memset(buffer, 0, LOG_SIZE);
+        if (mutex != NULL) xSemaphoreGive(mutex);
+    }
+
+    String toHtml() {
+      if (mutex != NULL) xSemaphoreTake(mutex, portMAX_DELAY);
+      String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta http-equiv='refresh' content='5'>";
+      html += "<style>body{background:#1e1e1e;color:#d4d4d4;font-family:monospace;padding:20px;}";
+      html += ".log{white-space:pre-wrap;word-wrap:break-word;} .time{color:#569cd6;} .err{color:#f44747;}</style></head><body>";
+      html += "<h2>Debug Log (Auto Refresh 5s)</h2><form action='/debug/clear' method='POST'><button>Limpar Log</button></form><hr><div class='log'>";
+      
+      String content = "";
+      content.reserve(LOG_SIZE);
+      if (wrapped) {
+          for(int i=head; i < LOG_SIZE; i++) content += buffer[i];
+          for(int i=0; i < head; i++) content += buffer[i];
+      } else {
+          for(int i=0; i < head; i++) content += buffer[i];
+      }
+      
+      // Escape basico e formatacao
+      content.replace("<", "&lt;");
+      content.replace(">", "&gt;");
+      content.replace("\n", "<br>");
+      
+      html += content;
+      html += "</div></body></html>";
+      
+      if (mutex != NULL) xSemaphoreGive(mutex);
+      return html;
+    }
+};
+
+DebugLog debugLog;
+
+// ==================== VARIÁVEIS GLOBAIS ====================
+Ultrasonic sonar1(TRIGGER_PIN, ECHO_PIN, 40000UL); // Timeout aumentado
 int distance = 0;
+
+// Urls atualizadas (REMOVED DUPLICATE)
+
+// Mutexes para Thread Safety
+SemaphoreHandle_t logMutex;
+SemaphoreHandle_t configMutex;
+SemaphoreHandle_t sensorMutex;
+TaskHandle_t iotTaskHandle;
+
+// Historico para moda
+#define HISTORY_SIZE 120
+int history[HISTORY_SIZE];
+int historyCount = 0;
+int historyIndex = 0;
 
 WebServer server(80);
 DNSServer dnsServer;
@@ -109,13 +223,28 @@ void setupDeviceID();
 void syncTime();
 String escapeHTML(String input);
 
+// Forward Declarations
+void initRemoteParams();
+void saveRemoteParams();
+void handleDebug();
+void handleDebugClear();
+
+// ==================== SETUP ====================
 // ==================== SETUP ====================
 void setup() {
   Serial.begin(115200);
+  
+  // Inicializa Mutexes
+  logMutex = xSemaphoreCreateMutex();
+  configMutex = xSemaphoreCreateMutex();
+  sensorMutex = xSemaphoreCreateMutex();
+
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
   WiFi.mode(WIFI_STA);
+  // WiFi.enableIPv6();  // Descomentar se necessario e suportado pela versao do core C3
+  
   setupDeviceID();
 
   // Inicializa o I2C e o display com U8g2
@@ -136,34 +265,54 @@ void setup() {
   WiFi.onEvent(handleWiFiEvent);
 
   bootTime = millis();
+  
+  // Inicializa em modo AP para configuracao
   switchToAPMode();
-
+  
+  initRemoteParams(); // Carrega parametros salvos
   setupWebServer();
-  Serial.println("Setup completo para ESP32-C3 com U8g2");
+  debugLog.log("Setup completo. Iniciando Tasks...");
+
+  // Inicializa Task IoT no Core 0 (Unico no C3)
+  xTaskCreatePinnedToCore(
+      IoT_Task,       // Funcao da tarefa
+      "IoT_Task",     // Nome
+      16384,          // Stack Size (16KB)
+      NULL,           // Params
+      1,              // Prioridade
+      &iotTaskHandle, // Handle
+      0               // Core ID (0)
+  );
 }
 
 // ==================== LOOP PRINCIPAL ====================
+// ==================== LOOP PRINCIPAL ====================
 void loop() {
+  // Leitura do Sonar (Agora seguro por mutex)
   if (!inAPMode) {
     sonar();
-    IoT();
   }
 
+  // Atualizacao do Display (Mantendo logica original)
   if (millis() - lastDisplayUpdate >= displayInterval) {
     tela();
     lastDisplayUpdate = millis();
   }
 
+  // Timeout do modo AP
   if (inAPMode && (millis() - bootTime > AP_MODE_DURATION)) {
     switchToStationMode();
   }
 
   updateLed();
-  server.handleClient();
+  server.handleClient(); // WebServer roda no Loop principal
 
   if (inAPMode) {
     dnsServer.processNextRequest();
   }
+  
+  // Yield para dar chance ao WiFi Stack (Crucial no Single Core)
+  delay(2); 
 }
 
 // ==================== FUNÇÃO DE TELA (com U8g2) ====================
@@ -213,18 +362,239 @@ void tela() {
 
 // ==================== FUNÇÕES DE IOT E REDE (sem alterações na lógica) ====================
 
-void IoT() {
-  if ((millis() - lastTime) > timerDelay) {
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("Enviando dados...");
-      getRemoteConfig();
-      publishSensorReading(distance);
-      sendPing();
-      lastTime = millis();
-    } else {
-      Serial.println("Sem conexão para enviar dados");
+// ==================== HELPER FUNCTIONS ====================
+// Calcula a moda das ultimas leituras para estabilidade
+int calculateMode() {
+    if (historyCount == 0) return 0;
+    
+    // Copia para ordenar
+    int sorted[HISTORY_SIZE];
+    int count = historyCount;
+    
+    // Acesso thread-safe ao historico
+    if (xSemaphoreTake(sensorMutex, portMAX_DELAY)) {
+         for(int i=0; i<count; i++) sorted[i] = history[i];
+         xSemaphoreGive(sensorMutex);
     }
+    
+    // Bubble sort simples (array pequeno)
+    for(int i=0; i<count-1; i++) {
+        for(int j=0; j<count-i-1; j++) {
+            if(sorted[j] > sorted[j+1]) {
+                int temp = sorted[j];
+                sorted[j] = sorted[j+1];
+                sorted[j+1] = temp;
+            }
+        }
+    }
+    
+    int mode = sorted[0];
+    int maxCount = 1;
+    int currentCount = 1;
+    
+    for(int i=1; i<count; i++) {
+        if (sorted[i] == sorted[i-1]) {
+            currentCount++;
+        } else {
+            if (currentCount > maxCount) {
+                maxCount = currentCount;
+                mode = sorted[i-1];
+            }
+            currentCount = 1;
+        }
+    }
+    if (currentCount > maxCount) {
+        mode = sorted[count-1];
+    }
+    
+    return mode;
+}
+
+// Helper Base64 simplificado usando mbedtls
+String base64Encode(String input) {
+  size_t outputLength = 0;
+  unsigned char *outputBuffer = new unsigned char[input.length() * 2]; // Aloca com sobra
+  
+  int ret = mbedtls_base64_encode(outputBuffer, input.length() * 2, &outputLength, (const unsigned char*)input.c_str(), input.length());
+  
+  String encoded = "";
+  if (ret == 0) {
+      outputBuffer[outputLength] = '\0'; 
+      encoded = String((char*)outputBuffer);
+  } else {
+      encoded = "encode_error";
   }
+  
+  delete[] outputBuffer;
+  return encoded;
+}
+
+// ==================== HELPER DE REDE (DEEP DEBUG) ====================
+int performHttpGet(String url, String &payload) {
+    if (WiFi.status() != WL_CONNECTED) {
+        debugLog.log("Abort Http: Sem WiFi");
+        return -1;
+    }
+
+    // === DEEP DEBUGGING START ===
+    unsigned long startTotal = millis();
+    String host = "";
+    // Extrai o host para debug de DNS
+    int slashIndex = url.indexOf("//");
+    if (slashIndex != -1) {
+        int nextSlash = url.indexOf("/", slashIndex + 2);
+        if (nextSlash != -1) host = url.substring(slashIndex + 2, nextSlash);
+        else host = url.substring(slashIndex + 2);
+    }
+    
+    // Debug DNS
+    if(host.length() > 0) {
+        IPAddress resolvedIP;
+        unsigned long startDNS = millis();
+        bool dnsFound = WiFi.hostByName(host.c_str(), resolvedIP);
+        long dnsTime = millis() - startDNS;
+        if(dnsFound) {
+            debugLog.log("DNS: " + host + " -> " + resolvedIP.toString() + " (" + String(dnsTime) + "ms)");
+        } else {
+            debugLog.log("DNS FAIL: " + host + " (" + String(dnsTime) + "ms)");
+            return -1; // Falha DNS aborta cedo
+        }
+    }
+    
+    debugLog.log("Req: " + url);
+    debugLog.log("Heap: " + String(ESP.getFreeHeap()));
+
+    HTTPClient http;
+    int httpCode = -1;
+    
+    if (url.startsWith("https")) {
+        WiFiClientSecure client;
+        client.setInsecure();
+        client.setHandshakeTimeout(30000); // 30s handshake timeout
+        
+        http.begin(client, url);
+        http.setTimeout(30000); 
+        http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+        httpCode = http.GET();
+        
+        if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
+             payload = http.getString();
+        }
+    } else {
+        WiFiClient client;
+        http.begin(client, url);
+        http.setTimeout(30000); 
+        http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+        httpCode = http.GET();
+        
+        if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
+             payload = http.getString();
+        }
+    }
+    
+    // Debug Connection + Request
+    if (httpCode > 0) {
+        if (httpCode == HTTP_CODE_OK) {
+             int pLen = payload.length();
+             debugLog.log("Payload bytes: " + String(pLen));
+             if (pLen > 0) {
+                 String preview = payload.substring(0, (pLen > 100 ? 100 : pLen));
+                 preview.replace("\n", " ");
+                 preview.replace("\r", "");
+                 debugLog.log("Data: " + preview + "...");
+             }
+        }
+    } else {
+         debugLog.log("Erro Req: " + http.errorToString(httpCode));
+    }
+    
+    http.end();
+    debugLog.log("Total Time: " + String(millis() - startTotal) + "ms");
+    debugLog.log("---------------------------");
+    
+    return httpCode;
+}
+
+void IoT_Task(void *parameter) {
+    debugLog.log("Tarefa IoT iniciada no Core " + String(xPortGetCoreID()));
+    
+    // Tentativa inicial de conexao
+    if (!inAPMode) {
+        Config cfg = loadConfig();
+        if (cfg.ssid != "" && cfg.ssid != "Wokwi") {
+             debugLog.log("Tentando conectar a: " + cfg.ssid);
+             WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
+        } else {
+             debugLog.log("SSID nao configurado. Iniciando AP.");
+             switchToAPMode();
+        }
+    }
+
+    // Variaveis locais para controle de tentativas
+    static int connectionAttempts = 0;
+    const int maxAttempts = 10;
+
+    for(;;) {
+        // Verifica conexao
+        if (WiFi.status() == WL_CONNECTED) {
+            // Reset contador se conectado
+            connectionAttempts = 0;
+
+            // Log de IP para debug
+            static bool ipLogged = false;
+            if (!ipLogged) {
+                 debugLog.log("WiFi OK. IPv4: " + WiFi.localIP().toString());
+                 ipLogged = true;
+            }
+
+            // OBTEM A MODA DAS ULTIMAS LEITURAS
+            int stableValue = calculateMode();
+            
+            // Envia dados para o servidor
+            publishSensorReading(stableValue);
+            
+            // Verifica por atualizacoes de firmware e configuracoes
+            getRemoteConfig();
+
+            // Envia ping para monitoramento
+            sendPing();
+            
+        } else {
+             // Se nao estiver em modo AP, tenta gerenciar a conexao
+             if (!inAPMode) {
+                 connectionAttempts++;
+                 debugLog.log("IoT: Sem WiFi (" + String(connectionAttempts) + "/" + String(maxAttempts) + ")");
+                 
+                 // Na primeira tentativa da sequencia, carrega as credenciais e inicia a conexao
+                 if (connectionAttempts == 1) {
+                      Config cfg = loadConfig();
+                      if (cfg.ssid != "" && cfg.ssid != "Wokwi") {
+                          debugLog.log("Iniciando conexao com: " + cfg.ssid);
+                          WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
+                      } else {
+                          debugLog.log("SSID nao configurado. Mudando para AP.");
+                          switchToAPMode();
+                          connectionAttempts = 0;
+                      }
+                 }
+                 else if (connectionAttempts >= maxAttempts) {
+                      debugLog.log("Falha na conexao. Mudando para AP.");
+                      switchToAPMode();
+                      connectionAttempts = 0;
+                 } 
+             }
+        }
+        
+        // Aguarda o intervalo (bloqueando apenas esta tarefa)
+        unsigned long delayTime = timerDelay > 10000 ? timerDelay : 60000;
+        
+        // Se estiver desconectado mas tentando, aguarda menos tempo para retentar
+        if (!inAPMode && WiFi.status() != WL_CONNECTED) {
+            delayTime = 5000; // Tenta a cada 5 segundos
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(delayTime)); 
+    }
 }
 
 void performUpdate(String url) {
@@ -235,17 +605,27 @@ void performUpdate(String url) {
     u8g2.drawStr(0, 22, "Baixando FW...");
     u8g2.sendBuffer();
 
+    // Configura Client (Secure ou Insecure) usando HEAP
     HTTPClient http;
-    http.begin(url);
-    http.setTimeout(15000);
-    int httpCode = http.GET();
-
-    if (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
-        url = http.header("Location");
-        http.end();
-        http.begin(url);
-        httpCode = http.GET();
+    WiFiClientSecure *clientSecure = nullptr;
+    WiFiClient *clientInsecure = nullptr;
+    
+    // Logica de HTTPS
+    if (url.startsWith("https")) {
+        clientSecure = new WiFiClientSecure();
+        clientSecure->setInsecure();
+        clientSecure->setHandshakeTimeout(30000); 
+        http.begin(*clientSecure, url);
+    } else {
+        clientInsecure = new WiFiClient();
+        http.begin(*clientInsecure, url);
     }
+    
+    http.setTimeout(30000);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    
+    int httpCode = http.GET();
+    // Redirect manual removido pois setFollowRedirects resolve
 
     if (httpCode != HTTP_CODE_OK) {
         Serial.printf("Erro no download, codigo: %d\n", httpCode);
@@ -254,7 +634,10 @@ void performUpdate(String url) {
         String codeStr = "Cod: " + String(httpCode);
         u8g2.drawStr(0, 22, codeStr.c_str());
         u8g2.sendBuffer();
+        
         http.end();
+        if (clientSecure) delete clientSecure;
+        if (clientInsecure) delete clientInsecure;
         return;
     }
 
@@ -262,12 +645,16 @@ void performUpdate(String url) {
     if (contentLength <= 0) {
         Serial.println("Tamanho do conteudo invalido.");
         http.end();
+        if (clientSecure) delete clientSecure;
+        if (clientInsecure) delete clientInsecure;
         return;
     }
 
     if (!Update.begin(contentLength)) {
         Serial.println("Nao ha espaco para atualizar.");
         http.end();
+        if (clientSecure) delete clientSecure;
+        if (clientInsecure) delete clientInsecure;
         return;
     }
 
@@ -276,22 +663,32 @@ void performUpdate(String url) {
     u8g2.drawStr(0, 22, "Nao desligue!");
     u8g2.sendBuffer();
 
-    Update.writeStream(http.getStream());
+    size_t written = Update.writeStream(http.getStream());
 
-    if (!Update.end()) {
-        Serial.println("Erro ao finalizar a atualizacao: " + String(Update.getError()));
-        http.end();
-        return;
+    if (written != contentLength) {
+          Serial.printf("Escrita falhou! Escrito %d de %d bytes\n", written, contentLength);
+    } else {
+          if (Update.end()) {
+              Serial.println("Atualizacao finalizada com sucesso!");
+              u8g2.clearBuffer();
+              u8g2.drawStr(0, 10, "Sucesso!");
+              u8g2.drawStr(0, 22, "Reiniciando...");
+              u8g2.sendBuffer();
+              delay(2000);
+              
+              http.end();
+              if (clientSecure) delete clientSecure;
+              if (clientInsecure) delete clientInsecure;
+              
+              ESP.restart();
+          } else {
+              Serial.println("Erro ao finalizar a atualizacao: " + String(Update.getError()));
+          }
     }
-
-    Serial.println("Atualizacao finalizada com sucesso!");
-    u8g2.clearBuffer();
-    u8g2.drawStr(0, 10, "Sucesso!");
-    u8g2.drawStr(0, 22, "Reiniciando...");
-    u8g2.sendBuffer();
+    
     http.end();
-    delay(2000);
-    ESP.restart();
+    if (clientSecure) delete clientSecure;
+    if (clientInsecure) delete clientInsecure;
 }
 
 
@@ -342,7 +739,7 @@ void startAccessPoint() {
 
   if (WiFi.softAP(apSsid.c_str(), "12345678", 6, false, 4)) {
     Serial.print("AP iniciado: "); Serial.println(apSsid);
-    Serial.print("IP do AP: "); Serial.println(WiFi.softAPIP());
+    Serial.print("IP do AP: "); Serial.println(WiFi.softAPIP()); // Função IoT() antiga removida (substituida por IoT_Task)
     if (dnsServer.start(53, "*", apIP)) {
       Serial.println("Servidor DNS iniciado.");
     } else {
@@ -400,10 +797,26 @@ void updateLed() {
 }
 
 // ==================== FUNÇÕES DO SENSOR ====================
+// ==================== FUNÇÕES DO SENSOR ====================
 void sonar() {
-  distance = sonar1.read();
-  distance = distance - distanciaSonda;
-  Serial.print("Sonar -> "); Serial.println(distance);
+  int raw = sonar1.read();
+  // Validacao basica
+  if (raw > 0 && raw < 400) {
+       int calc = raw - distanciaSonda; // Ajuste de offset
+       
+       // Seta variavel global para display
+       distance = calc;
+       
+       // Adiciona ao historico para moda (Thread Safe)
+       if (xSemaphoreTake(sensorMutex, portMAX_DELAY)) {
+            history[historyIndex] = calc;
+            historyIndex = (historyIndex + 1) % HISTORY_SIZE;
+            if (historyCount < HISTORY_SIZE) historyCount++;
+            xSemaphoreGive(sensorMutex);
+       }
+  }
+  
+  // Serial de feedback removido para reduzir ruido, ja temos log
 }
 
 
@@ -455,11 +868,22 @@ void setupWebServer() {
   server.on("/esquema", handleEsquema);
   server.on("/scan-wifi", handleWiFiScan);
   server.on("/generate_204", handleRoot);
-  server.on("/gen_204", handleRoot);
-  server.on("/hotspot-detect.html", handleRoot);
-  server.on("/library/test/success.html", handleRoot);
-  server.on("/ncsi.txt", handleRoot);
-  server.on("/connecttest.txt", handleRoot);
+  
+  // Endpoint de Debug
+  server.on("/debug", handleDebug);
+  server.on("/debug/clear", HTTP_POST, handleDebugClear);
+
+  // Endpoint API Status (JSON)
+  server.on("/api/status", HTTP_GET, []() {
+      String json = "{";
+      json += "\"distance\":" + String(distance) + ",";
+      json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+      json += "\"heap\":" + String(ESP.getFreeHeap()) + ",";
+      json += "\"mode_value\":" + String(calculateMode()); 
+      json += "}";
+      server.send(200, "application/json", json);
+  });
+
   server.onNotFound(handleNotFound);
   server.begin();
 }
@@ -472,22 +896,117 @@ String escapeHTML(String input) {
   input.replace("&", "&amp;");
   input.replace("\"", "&quot;");
   input.replace("'", "&#39;");
+  input.replace("'", "&#39;");
   input.replace("<", "&lt;");
   input.replace(">", "&gt;");
   return input;
 }
 
+// ==================== HANDLER RAIZ (CONFIG + DASHBOARD) ====================
 void handleRoot() {
   Config cfg = loadConfig();
   String html = R"rawliteral(
-  <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Configuração do Sensor</title>
-  <style>body{font-family:Arial,sans-serif;margin:20px;background-color:#f5f5f5;}.container{background-color:white;padding:20px;border-radius:5px;box-shadow:0 2px 5px rgba(0,0,0,0.1);max-width:500px;margin:0 auto;}h2{color:#333;text-align:center;}form{margin-top:20px;}.form-group{margin-bottom:15px;}label{display:block;margin-bottom:5px;font-weight:bold;}input[type="text"],input[type="password"],input[type="number"],select{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;font-size:16px;}input[type="submit"],button{background-color:#4CAF50;color:white;padding:12px 15px;border:none;border-radius:4px;cursor:pointer;width:100%;font-size:16px;margin-top:10px;}input[type="submit"]:hover,button:hover{background-color:#45a049;}#ssid-list{width:100%;margin-top:5px;display:none;}.loading{display:none;text-align:center;margin-top:5px;}</style>
-  </head><body><div class="container"><h2>Configuração do Sensor</h2><form action="/save" method="GET"><div class="form-group"><label for="ssid">SSID:</label><input type="text" id="ssid" name="ssid" value=")rawliteral";
-  html += escapeHTML(cfg.ssid);
-  html += R"rawliteral("><button type="button" id="scan-wifi" onclick="scanWiFi()">Buscar Redes WiFi</button><div id="loading" class="loading">Buscando redes...</div><select id="ssid-list" onchange="document.getElementById('ssid').value=this.value"><option value="">Selecione uma rede...</option></select></div><div class="form-group"><label for="pass">Senha WiFi:</label><input type="text" id="pass" name="pass" value=")rawliteral" + escapeHTML(cfg.pass) + R"rawliteral("></div><div class="form-group"><label for="sensor-id">ID do Sensor:</label><input type="number" id="sensor-id" name="sensor_id" value=")rawliteral" + cfg.sensorId + R"rawliteral(" list="sensor-suggestions" min="1" required><datalist id="sensor-suggestions"><option value="1">Torre E</option><option value="2">Torre F</option><option value="3">Torre A</option><option value="4">Torre B</option><option value="5">Torre C</option><option value="6">Torre D</option></datalist></div><div class="form-group"><label for="nome_sonda">Nome da Sonda (Local):</label><input type="text" id="nome_sonda" name="nome_sonda" value=")rawliteral" + escapeHTML(cfg.nomeSonda) + R"rawliteral("></div><input type="submit" value="Salvar Configurações"><div class="form-group"><button type="button" onclick="window.location='/esquema'">Esquema Elétrico</button></div></form></div>
-  <script>function scanWiFi(){const ssidList=document.getElementById('ssid-list'),loading=document.getElementById('loading'),scanButton=document.getElementById('scan-wifi');loading.style.display='block';ssidList.style.display='none';scanButton.disabled=true;fetch('/scan-wifi').then(response=>response.json()).then(data=>{ssidList.innerHTML='<option value="">Selecione uma rede...</option>';data.networks.forEach(network=>{const option=document.createElement('option');option.value=network.ssid;option.textContent=network.ssid+' (RSSI: '+network.rssi+')';ssidList.appendChild(option);});ssidList.style.display='block';loading.style.display='none';scanButton.disabled=false;}).catch(error=>{console.error('Erro ao buscar redes:',error);loading.textContent='Erro ao buscar redes. Tente novamente.';scanButton.disabled=false;});}</script>
+  <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Configuração do Sensor (C3)</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:20px;background-color:#f5f5f5;}
+    .container{background-color:white;padding:20px;border-radius:5px;box-shadow:0 2px 5px rgba(0,0,0,0.1);max-width:500px;margin:0 auto;}
+    h2{color:#333;text-align:center;}
+    form{margin-top:20px;}
+    .form-group{margin-bottom:15px;}
+    label{display:block;margin-bottom:5px;font-weight:bold;}
+    input[type="text"],input[type="password"],input[type="number"],select{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;font-size:16px;}
+    .btn-group {display: flex; gap: 10px; margin-top: 15px;}
+    input[type="submit"],button{flex: 1; background-color:#4CAF50;color:white;padding:12px;border:none;border-radius:4px;cursor:pointer;font-size:16px;}
+    button.secondary {background-color: #2196F3;}
+    button.debug {background-color: #FF5722;}
+    input[type="submit"]:hover,button:hover{opacity:0.9;}
+    #ssid-list{display:none;}
+    .loading{display:none;text-align:center;}
+  </style>
+  </head><body>
+  <div class="container">
+    <h2>Sensor Liquid Sky (C3)</h2>
+    
+    <!-- REALTIME DASHBOARD -->
+    <div style="background: #e0f7fa; padding: 15px; border-radius: 5px; margin-bottom: 20px; text-align: center; border: 1px solid #b2ebf2;">
+        <h3 style="margin-top: 0; color: #006064;">Nível Atual (Moda)</h3>
+        <div style="font-size: 48px; font-weight: bold; color: #00838f;" id="dash-dist">-- cm</div>
+        <div style="display: flex; justify-content: space-around; margin-top: 10px; font-size: 14px; color: #555;">
+            <span>Signal: <strong id="dash-rssi">--</strong> dBm</span>
+            <span>Heap: <strong id="dash-heap">--</strong> B</span>
+            <span>Latência: <strong id="dash-lat">--</strong> ms</span>
+        </div>
+    </div>
+    
+    <form action="/save" method="GET">
+      <h3>WiFi & ID</h3>
+      <div class="form-group"><label for="ssid">SSID:</label>
+        <div style="display:flex; gap:5px;">
+            <input type="text" id="ssid" name="ssid" value=")rawliteral";
+            html += escapeHTML(cfg.ssid);
+            html += R"rawliteral(">
+            <button type="button" onclick="scanWiFi()" class="secondary" style="flex:0 0 60px;">Scan</button>
+        </div>
+        <div id="loading" class="loading">Buscando...</div>
+        <select id="ssid-list" onchange="document.getElementById('ssid').value=this.value"><option value="">Selecionar...</option></select>
+      </div>
+
+      <div class="form-group"><label for="pass">Senha WiFi:</label><input type="text" id="pass" name="pass" value=")rawliteral" + escapeHTML(cfg.pass) + R"rawliteral("></div>
+      
+      <div class="form-group"><label for="sensor-id">ID do Sensor (1-6 para Torres):</label>
+        <input type="number" id="sensor-id" name="sensor_id" value=")rawliteral" + cfg.sensorId + R"rawliteral(" min="1" required>
+      </div>
+      
+      <div class="form-group"><label for="nome_sonda">Nome Local:</label><input type="text" id="nome_sonda" name="nome_sonda" value=")rawliteral" + escapeHTML(cfg.nomeSonda) + R"rawliteral("></div>
+
+      <h3>Parametros Remotos</h3>
+      <div class="form-group"><label>URL Ping:</label><input type="text" name="ping_url" value=")rawliteral" + escapeHTML(pingBaseUrl) + R"rawliteral("></div>
+      <div class="form-group"><label>URL Remote Config:</label><input type="text" name="remote_url" value=")rawliteral" + escapeHTML(remoteConfigUrl) + R"rawliteral("></div>
+      <div class="form-group"><label>URL Leitura (Sonda):</label><input type="text" name="sonda_url" value=")rawliteral" + escapeHTML(novoUrlSite) + R"rawliteral("></div>
+
+      <div class="btn-group">
+        <input type="submit" value="Salvar">
+      </div>
+    </form>
+    
+    <div class="btn-group">
+       <button type="button" class="secondary" onclick="window.location='/esquema'">Esquema</button>
+       <button type="button" class="debug" onclick="window.location='/debug'">Debug Log</button>
+    </div>
+    
+  </div>
+  <script>
+  // REALTIME POLLING
+  setInterval(function() {
+      var start = Date.now();
+      fetch('/api/status')
+        .then(response => response.json())
+        .then(data => {
+            var lat = Date.now() - start;
+            document.getElementById('dash-dist').innerText = data.mode_value + ' cm';
+            document.getElementById('dash-rssi').innerText = data.rssi;
+            document.getElementById('dash-heap').innerText = data.heap;
+            document.getElementById('dash-lat').innerText = lat;
+        })
+        .catch(e => console.log('Erro poll:', e));
+  }, 2000);
+
+  function scanWiFi(){
+    const lst=document.getElementById('ssid-list'),load=document.getElementById('loading');
+    load.style.display='block';lst.style.display='none';
+    fetch('/scan-wifi').then(r=>r.json()).then(d=>{
+        lst.innerHTML='<option value="">Selecionar...</option>';
+        d.networks.forEach(n=>{
+            let opt=document.createElement('option');
+            opt.value=n.ssid;
+            opt.textContent=n.ssid+' ('+n.rssi+')';
+            lst.appendChild(opt);
+        });
+        lst.style.display='block';load.style.display='none';
+    });
+  }
+  </script>
   </body></html>)rawliteral";
-  server.sendHeader("Content-Type", "text/html; charset=UTF-8");
   server.send(200, "text/html", html);
 }
 
@@ -714,6 +1233,16 @@ void handleEsquema(){
   server.send(200, "text/html", html);
 }
 
+void handleDebug() {
+    server.send(200, "text/html", debugLog.toHtml());
+}
+
+void handleDebugClear() {
+    debugLog.clear();
+    server.sendHeader("Location", "/debug");
+    server.send(303);
+}
+
 void handleWiFiScan() {
   int n = WiFi.scanNetworks();
   String json = "{\"networks\":[";
@@ -737,88 +1266,148 @@ void handleSave() {
     server.send(400, "text/plain", "Erro: Preencha todos os campos.");
     return;
   }
+  
+  // Salva WIFI
   saveConfig(ssid, pass, sensorId, nomeSonda);
+  
+  // Salva urls extras (se presentes)
+  if (server.hasArg("ping_url")) pingBaseUrl = server.arg("ping_url");
+  if (server.hasArg("remote_url")) remoteConfigUrl = server.arg("remote_url");
+  if (server.hasArg("sonda_url")) novoUrlSite = server.arg("sonda_url");
+  saveRemoteParams();
+
   String response = "<html><meta charset='UTF-8'><body><h1>Configuracoes salvas!</h1><p>O dispositivo sera reiniciado em 5 segundos...</p></body></html>";
   server.send(200, "text/html; charset=UTF-8", response);
   delay(5000);
   ESP.restart();
 }
 
+// ==================== PERSISTENCIA DE PARAMETROS REMOTOS ====================
+void initRemoteParams() {
+  debugLog.log("Carregando parametros remotos do disco...");
+  prefs.begin("global-config", true);
+  
+  if (prefs.isKey("novoUrlSite")) novoUrlSite = prefs.getString("novoUrlSite", novoUrlSite);
+  if (prefs.isKey("pingBaseUrl")) pingBaseUrl = prefs.getString("pingBaseUrl", pingBaseUrl);
+  if (prefs.isKey("remoteConfigUrl")) remoteConfigUrl = prefs.getString("remoteConfigUrl", remoteConfigUrl);
+  if (prefs.isKey("timerDelay")) timerDelay = prefs.getULong("timerDelay", timerDelay);
+  if (prefs.isKey("alertLevelCm")) alertLevelCm = prefs.getInt("alertLevelCm", alertLevelCm);
+  
+  prefs.end();
+  
+  debugLog.log("Params carregados:");
+  debugLog.log(" Remote: " + remoteConfigUrl);
+  debugLog.log(" Ping: " + pingBaseUrl);
+  debugLog.log(" Sonda: " + novoUrlSite);
+}
+
+void saveRemoteParams() {
+  debugLog.log("Salvando novos parametros no disco...");
+  prefs.begin("global-config", false);
+  prefs.putString("novoUrlSite", novoUrlSite);
+  prefs.putString("pingBaseUrl", pingBaseUrl);
+  prefs.putString("remoteConfigUrl", remoteConfigUrl);
+  prefs.putULong("timerDelay", timerDelay);
+  prefs.putInt("alertLevelCm", alertLevelCm);
+  prefs.end();
+}
+
 void getRemoteConfig() {
-  String remoteConfigUrl = "https://raw.githubusercontent.com/davinunes/TopLifeMiami-Nivel-de-gua/refs/heads/main/parametros/remote.json";
-  Serial.println("Buscando configuracoes remotas...");
-  HTTPClient http;
-  http.begin(remoteConfigUrl);
-  int httpCode = http.GET();
+  // String remoteConfigUrl = ... (REMOVED to use Global)
+  debugLog.log("Buscando configuracoes remotas...");
+  
+  String payload;
+  int httpCode = performHttpGet(remoteConfigUrl, payload);
+
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("Falha ao buscar config, codigo: %d\n", httpCode);
-    http.end();
+    debugLog.log("Falha config: " + String(httpCode));
     return;
   }
-  String payload = http.getString();
-  http.end();
+  
   DynamicJsonDocument doc(2048);
   deserializeJson(doc, payload);
+  
   JsonObject generalConfig = doc["general_config"];
-  pingBaseUrl = generalConfig["ping_base_url"].as<String>();
-  timerDelay = generalConfig["update_interval_ms"];
-  novoUrlSite = generalConfig["url_leituras_sensor"].as<String>();
+  if (!generalConfig.isNull()) {
+      if (generalConfig.containsKey("ping_base_url")) {
+          String val = generalConfig["ping_base_url"].as<String>();
+          debugLog.log("Attr ping_base: " + val);
+          pingBaseUrl = val;
+      }
+      if (generalConfig.containsKey("update_interval_ms")) timerDelay = generalConfig["update_interval_ms"];
+      if (generalConfig.containsKey("url_leituras_sensor")) {
+           String val = generalConfig["url_leituras_sensor"].as<String>();
+           debugLog.log("Attr sonda_url: " + val);
+           novoUrlSite = val;
+      }
+      
+      // Salva no disco
+      saveRemoteParams();
+  } else {
+      debugLog.log("JSON general_config missing or null");
+      // Debug do payload inteiro se falhar
+      debugLog.log("Payload: " + payload.substring(0, 100)); 
+  }
 
-  Serial.println("Configuracoes remotas atualizadas.");
+  debugLog.log("Config atualizada. Ping: " + pingBaseUrl);
 
   JsonObject fotaConfig = doc["fota_config"][BOARD_MODEL];
   if (fotaConfig.isNull()) {
-    Serial.println("Nenhuma config de FOTA para o modelo: " + String(BOARD_MODEL));
+    debugLog.log("Sem FOTA para: " + String(BOARD_MODEL));
     return;
   }
+  
   float newVersion = fotaConfig["version"];
   if (newVersion > FW_VERSION) {
-    Serial.println("Nova versao de firmware encontrada: " + String(newVersion));
+    debugLog.log("Nova versao: " + String(newVersion));
     String firmwareUrl = fotaConfig["url"];
     performUpdate(firmwareUrl);
   } else {
-    Serial.println("Firmware ja esta na versao mais recente.");
+    debugLog.log("FW Atualizado.");
   }
 }
 
 void sendPing() {
   if (pingBaseUrl.length() == 0) return;
   Config cfg = loadConfig();
+  
+  // Remove : do UUID
+  String cleanUuid = deviceUuid;
+  cleanUuid.replace(":", "");
+  
+  // Prepara Log codificado
+  String logEncoded = "";
+  if (xSemaphoreTake(logMutex, 100)) {
+      String logs = debugLog.getLogString();
+      // Pega os ultimos 500 chars se for muito grande
+      if (logs.length() > 500) logs = logs.substring(logs.length() - 500);
+      logEncoded = base64Encode(logs);
+      xSemaphoreGive(logMutex);
+  }
+
   String pingUrl = pingBaseUrl;
-  pingUrl += "?uuid=" + urlEncode(deviceUuid);
+  pingUrl += "?uuid=" + urlEncode(cleanUuid);
   pingUrl += "&board=" + urlEncode(String(BOARD_MODEL));
   pingUrl += "&site_esp=" + urlEncode(nomeDaSonda);
   pingUrl += "&ssid=" + urlEncode(cfg.ssid);
-  pingUrl += "&password=" + urlEncode(cfg.pass);
   pingUrl += "&sensorId=" + urlEncode(String(idSensor));
   pingUrl += "&version=" + urlEncode(String(FW_VERSION));
+  pingUrl += "&log_b64=" + urlEncode(logEncoded);
 
-  Serial.println("Enviando ping: " + pingUrl);
-  HTTPClient http;
-  http.begin(pingUrl);
-  http.setTimeout(8000);
-  int httpCode = http.GET();
-  if (httpCode > 0) {
-    Serial.printf("Ping enviado. Codigo: %d\n", httpCode);
-  } else {
-    Serial.printf("Falha no ping, erro: %s\n", http.errorToString(httpCode).c_str());
-  }
-  http.end();
+  debugLog.log("Ping: " + pingUrl);
+  
+  String payload;
+  performHttpGet(pingUrl, payload);
 }
 
 void publishSensorReading(int sensorValue) {
   if (novoUrlSite.length() == 0) return;
   String publishUrl = novoUrlSite + "/sonda/?sensor=" + String(idSensor) + "&valor=" + String(sensorValue);
-  Serial.println("Publicando leitura: " + publishUrl);
-  HTTPClient http;
-  http.begin(publishUrl);
-  int httpCode = http.GET();
-  if (httpCode > 0) {
-    Serial.printf("Leitura publicada. Codigo: %d\n", httpCode);
-  } else {
-    Serial.printf("Falha ao publicar, erro: %s\n", http.errorToString(httpCode).c_str());
-  }
-  http.end();
+  
+  debugLog.log("Pub Leitura: " + publishUrl);
+  
+  String payload;
+  performHttpGet(publishUrl, payload);
 }
 
 void setupDeviceID() {
