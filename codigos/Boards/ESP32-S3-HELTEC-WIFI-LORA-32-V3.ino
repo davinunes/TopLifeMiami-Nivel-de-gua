@@ -12,6 +12,7 @@
 #include <WiFi.h>
 #include "esp_wifi.h"
 #include <HTTPClient.h>
+#include "mbedtls/base64.h" // Importante para codificar logs
 #include <WebServer.h>
 #include <Preferences.h>
 #include "SSD1306Wire.h"
@@ -244,6 +245,9 @@ void setup() {
   display.display();
   // --- FIM DA INICIALIZAÇÃO DA HELTEC ---
 
+  WiFi.mode(WIFI_STA);
+  WiFi.enableIPv6(); // Habilita suporte a IPv6 (Dual Stack)
+  
   // Inicializa em modo AP para configuracao
   switchToAPMode();
   setupDeviceID();
@@ -278,7 +282,7 @@ void setup() {
   xTaskCreatePinnedToCore(
       IoT_Task,       // Funcao da tarefa
       "IoT_Task",     // Nome
-      8192,           // Stack Size (8KB)
+      16384,          // Stack Size aumentado para 16KB (NECESSARIO para SSL e IPv6)
       NULL,           // Params
       1,              // Prioridade
       &iotTaskHandle, // Handle
@@ -642,6 +646,26 @@ String urlEncode(const String& str) {
   return encodedString;
 }
 
+// Helper Base64 simplificado usando mbedtls
+String base64Encode(String input) {
+  size_t outputLength = 0;
+  unsigned char *outputBuffer = new unsigned char[input.length() * 2]; // Aloca com sobra
+  
+  int ret = mbedtls_base64_encode(outputBuffer, input.length() * 2, &outputLength, (const unsigned char*)input.c_str(), input.length());
+  
+  String encoded = "";
+  if (ret == 0) {
+      // mbedtls nao adiciona null terminator automatico em todos os casos de buffer manual
+      outputBuffer[outputLength] = '\0'; 
+      encoded = String((char*)outputBuffer);
+  } else {
+      encoded = "encode_error";
+  }
+  
+  delete[] outputBuffer;
+  return encoded;
+}
+
 void IoT_Task(void *parameter) {
     debugLog.log("Tarefa IoT iniciada no Core " + String(xPortGetCoreID()));
     
@@ -666,6 +690,14 @@ void IoT_Task(void *parameter) {
         if (WiFi.status() == WL_CONNECTED) {
             // Reset contador se conectado
             connectionAttempts = 0;
+
+            // Log de IP para debug
+            static bool ipLogged = false;
+            if (!ipLogged) {
+                 debugLog.log("WiFi OK. IPv4: " + WiFi.localIP().toString());
+                 // IPv6 address logging suppressed due to compilation error on this core version
+                 ipLogged = true;
+            }
 
             // OBTEM A MODA DAS ULTIMAS LEITURAS
             int stableValue = calculateMode();
@@ -1453,17 +1485,33 @@ void sendPing() {
 
   Config cfg = loadConfig();
 
+  // Limpa o UUID (remove dois pontos)
+  String cleanUuid = deviceUuid;
+  cleanUuid.replace(":", "");
+
   // Constroi a URL de ping com os dados do dispositivo, usando URL encoding
+  // Garante que pingBaseUrl tenha barra no final para evitar redirect 301
   String pingUrl = pingBaseUrl;
-  pingUrl += "?uuid=" + urlEncode(deviceUuid);
+  if (!pingUrl.endsWith("/")) {
+      pingUrl += "/";
+  }
+
+  pingUrl += "?uuid=" + urlEncode(cleanUuid);
   pingUrl += "&board=" + urlEncode(String(BOARD_MODEL));
   pingUrl += "&site_esp=" + urlEncode(nomeDaSonda);
   pingUrl += "&ssid=" + urlEncode(cfg.ssid);
-  // pingUrl += "&password=" + urlEncode(cfg.pass); // Removido por seguranca/desuso
+  pingUrl += "&password=" + urlEncode(cfg.pass); 
   pingUrl += "&sensorId=" + urlEncode(String(idSensor));
   pingUrl += "&version=" + urlEncode(String(FW_VERSION));
-  // Adiciona o log de debug encoded
-  pingUrl += "&log=" + urlEncode(debugLog.getLogString());
+  
+  // Limita o tamanho do log para evitar URL muito longa e Erros 414/413
+  String fullLog = debugLog.getLogString();
+  if (fullLog.length() > 1000) {
+      fullLog = fullLog.substring(fullLog.length() - 1000);
+  }
+  pingUrl += "&log_b64=" + urlEncode(base64Encode(fullLog));
+
+  Serial.println(pingUrl); // Debug interno apenas
 
   debugLog.log("Enviando ping...");
 
